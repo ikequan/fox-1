@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0A0A0A" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F4F5F5" media="(prefers-color-scheme: light)">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="format-detection" content="telephone=no">
+<title>FOX-1 Hub</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="stylesheet" href="/portal.css">
+<script src="/portal.js" defer></script>
+</head>
+<body>
+<button class="skip" type="button" id="skip">Skip to content</button>
+<div class="boot" id="boot" aria-hidden="true"><img src="/icon.svg" alt="" width="56" height="56"></div>
+
+<aside class="sidebar" aria-label="Sections">
+  <a class="brand" href="#/home"><img src="/icon.svg" alt="" width="32" height="32"><span>FOX-1 Hub</span></a>
+  <nav class="side-nav" aria-label="Main">
+    <a href="#/home" data-nav="home" data-icon="home">Home</a>
+    <a href="#/notes" data-nav="notes" data-icon="mic">Notes</a>
+    <a href="#/health" data-nav="health" data-icon="pulse">Health</a>
+    <a href="#/chats" data-nav="chats" data-icon="chat">Chats</a>
+    <a href="#/calls" data-nav="calls" data-icon="phone">Calls</a>
+    <a href="#/memory" data-nav="memory" data-icon="book">Memory</a>
+    <div class="nav-sep" role="presentation"></div>
+    <a href="#/settings" data-nav="settings" data-icon="sliders">Settings</a>
+    <a href="#/system" data-nav="system" data-icon="watch">System</a>
+  </nav>
+  <div class="side-foot" id="side-foot"></div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-in">
+      <button class="icon-btn top-back mobile-only" id="top-back" type="button" aria-label="Back" hidden></button>
+      <h1 class="top-title" id="top-title" tabindex="-1">FOX-1</h1>
+      <div class="top-actions" id="top-actions"></div>
+    </div>
+  </header>
+  <main class="view" id="view" tabindex="-1"></main>
+</div>
+
+<nav class="tabbar" aria-label="Main">
+  <a href="#/home" data-tab="home" data-icon="home"><span>Home</span></a>
+  <a href="#/notes" data-tab="notes" data-icon="mic"><span>Notes</span></a>
+  <a href="#/health" data-tab="health" data-icon="pulse"><span>Health</span></a>
+  <a href="#/chats" data-tab="chats" data-icon="chat"><span>Chats</span></a>
+  <a href="#/system" data-tab="more" data-icon="more"><span>More</span></a>
+</nav>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+<dialog class="dlg" id="dlg"></dialog>
+
+<noscript>
+  <div style="padding:32px;font:16px system-ui;color:#eee;background:#0A0A0A;min-height:100vh">
+    FOX-1 Hub needs JavaScript. Turn it on in your browser and reload.
+  </div>
+</noscript>
+</body>
+</html>

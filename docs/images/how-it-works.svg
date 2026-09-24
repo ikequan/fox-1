@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-labelledby="t d">
+  <title id="t">How FOX-1 works</title>
+  <desc id="d">The smart ring, the call bridge and your phone connect to FOX-1 on the device. On the device, the AI session links the mic, camera and speaker, the live fox, the on-device tools and FOX-1 Hub. Beyond the device, the session talks to a live model, and the tools hand remote jobs to an agent gateway.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="#8a8a92"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="#e8823c"/>
+    </marker>
+    <linearGradient id="sess" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f09a55"/>
+      <stop offset="1" stop-color="#d9702a"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .frame { fill: #121214; stroke: #26262b; stroke-width: 1.5; }
+      .ftitle { fill: #8a8a92; font-size: 12px; font-weight: 700; letter-spacing: .14em; }
+      .node { fill: #1b1b1f; stroke: #313137; stroke-width: 1.2; }
+      .h { fill: #f4f1ec; font-size: 15px; font-weight: 650; }
+      .s { fill: #9a9aa2; font-size: 12px; }
+      .line { stroke: #8a8a92; stroke-width: 1.6; fill: none; }
+      .hot { stroke: #e8823c; stroke-width: 2; fill: none; }
+      .lbg { fill: #0b0b0c; }
+      .lab { fill: #c9c6c1; font-size: 12px; }
+      .opt { fill: #6c6c74; font-size: 11px; font-style: italic; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="600" rx="18" fill="#0b0b0c"/>
+
+  <!-- frames -->
+  <rect class="frame" x="28" y="44" width="276" height="530" rx="16"/>
+  <text class="ftitle" x="166" y="76" text-anchor="middle">AROUND YOU</text>
+  <rect class="frame" x="352" y="44" width="496" height="530" rx="16" stroke="#3a2a1f"/>
+  <text class="ftitle" x="600" y="76" text-anchor="middle" fill="#e8823c" style="fill:#e8823c">FOX-1 ON THE DEVICE</text>
+  <rect class="frame" x="896" y="44" width="276" height="530" rx="16"/>
+  <text class="ftitle" x="1034" y="76" text-anchor="middle">BEYOND THE DEVICE</text>
+
+  <!-- connections (drawn first, under the nodes) -->
+  <path class="line" d="M282 168 C 380 168, 410 262, 500 262" marker-end="url(#a)"/>
+  <path class="line" d="M282 338 C 380 338, 410 280, 500 280" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path class="line" d="M282 508 L 374 508" marker-end="url(#a)"/>
+  <path class="hot"  d="M700 262 C 790 262, 820 240, 918 240" marker-start="url(#ao)" marker-end="url(#ao)"/>
+  <path class="line" d="M822 406 C 860 406, 880 430, 918 430" marker-end="url(#a)"/>
+  <path class="line" d="M600 184 L 600 238" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path class="line" d="M560 302 L 500 362" marker-end="url(#a)"/>
+  <path class="line" d="M640 302 L 700 362" marker-start="url(#a)" marker-end="url(#a)"/>
+
+  <!-- connection labels -->
+  <rect class="lbg" x="340" y="194" width="92" height="20" rx="6"/>
+  <text class="lab" x="386" y="208" text-anchor="middle">Bluetooth LE</text>
+  <rect class="lbg" x="350" y="300" width="72" height="20" rx="6"/>
+  <text class="lab" x="386" y="314" text-anchor="middle">call audio</text>
+  <rect class="lbg" x="290" y="480" width="80" height="20" rx="6"/>
+  <text class="lab" x="330" y="494" text-anchor="middle">Wi-Fi · PIN</text>
+  <rect class="lbg" x="742" y="222" width="118" height="20" rx="6"/>
+  <text class="lab" x="801" y="236" text-anchor="middle" style="fill:#f0a064">live audio + video</text>
+  <rect class="lbg" x="826" y="388" width="84" height="20" rx="6"/>
+  <text class="lab" x="868" y="402" text-anchor="middle">remote jobs</text>
+
+  <!-- around you -->
+  <rect class="node" x="48" y="128" width="234" height="80" rx="12"/>
+  <text class="h" x="70" y="160">Smart ring</text>
+  <text class="s" x="70" y="182">hold to talk · notes · health</text>
+  <text class="opt" x="70" y="198">optional</text>
+
+  <rect class="node" x="48" y="298" width="234" height="80" rx="12"/>
+  <text class="h" x="70" y="330">Call bridge</text>
+  <text class="s" x="70" y="352">ESP32 · speaks on phone calls</text>
+  <text class="opt" x="70" y="368">optional</text>
+
+  <rect class="node" x="48" y="468" width="234" height="80" rx="12"/>
+  <text class="h" x="70" y="500">Your phone</text>
+  <text class="s" x="70" y="522">any browser</text>
+
+  <!-- the device -->
+  <rect class="node" x="460" y="120" width="280" height="64" rx="12"/>
+  <text class="h" x="600" y="148" text-anchor="middle">Mic · Camera · Speaker</text>
+  <text class="s" x="600" y="168" text-anchor="middle">or your Bluetooth earbuds</text>
+
+  <rect x="500" y="238" width="200" height="64" rx="32" fill="url(#sess)"/>
+  <text x="600" y="266" text-anchor="middle" style="fill:#1a0d04;font-size:16px;font-weight:750">AI session</text>
+  <text x="600" y="285" text-anchor="middle" style="fill:#3a1c08;font-size:12px">voice · vision · tools</text>
+
+  <rect class="node" x="376" y="362" width="200" height="80" rx="12"/>
+  <text class="h" x="396" y="394">Live fox</text>
+  <text class="s" x="396" y="416">follows the conversation</text>
+
+  <rect class="node" x="624" y="362" width="200" height="80" rx="12"/>
+  <text class="h" x="644" y="394">On-device tools</text>
+  <text class="s" x="644" y="414">apps · screen · alarms · calls</text>
+  <text class="s" x="644" y="430">notes · health · memory</text>
+
+  <rect class="node" x="376" y="468" width="200" height="80" rx="12"/>
+  <text class="h" x="396" y="500">FOX-1 Hub</text>
+  <text class="s" x="396" y="522">served by the device</text>
+
+  <!-- beyond -->
+  <rect class="node" x="918" y="190" width="234" height="104" rx="12" stroke="#5a3a22"/>
+  <text class="h" x="940" y="222">Live model</text>
+  <text class="s" x="940" y="244">Gemini Live today</text>
+  <text class="s" x="940" y="262">GPT-Live-1 and open-source</text>
+  <text class="s" x="940" y="278">live models next</text>
+
+  <rect class="node" x="918" y="390" width="234" height="80" rx="12"/>
+  <text class="h" x="940" y="422">Agent gateway</text>
+  <text class="s" x="940" y="444">OpenClaw · Agent Relay</text>
+  <text class="opt" x="940" y="460">optional</text>
+</svg>

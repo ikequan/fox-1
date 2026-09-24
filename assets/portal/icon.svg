@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>FOX-1</title>
+  <rect width="64" height="64" rx="15" fill="#0A0A0A"/>
+  <rect x=".75" y=".75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="#00E5CC" stroke-opacity=".22" stroke-width="1.5"/>
+  <circle cx="32" cy="33" r="17" fill="none" stroke="#00E5CC" stroke-width="4"/>
+  <rect x="24" y="27" width="5" height="10" rx="2.5" fill="#00E5CC"/>
+  <rect x="35" y="27" width="5" height="10" rx="2.5" fill="#00E5CC"/>
+  <path d="M26.5 10.5 32 16l5.5-5.5" fill="none" stroke="#00E5CC" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
