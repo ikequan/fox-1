@@ -18,6 +18,7 @@ import '../ring/ring_ble.dart';
 /// internal/health/…           day files and summaries   (app's private files dir)
 /// internal/notes/…            <id>.opus40 + <id>.json
 /// internal/conversations/…    <day>.jsonl
+/// internal/episodes/…         <day>.json (remembered key points)
 /// external/memory.json        (app's external files dir)
 /// external/call_history.json
 /// external/pending_reports.json
@@ -30,7 +31,7 @@ class BackupFormat {
   static const version = 1;
 
   /// Folders under the app's private files dir that are the wearer's data.
-  static const internalDirs = ['health', 'notes', 'conversations'];
+  static const internalDirs = ['health', 'notes', 'conversations', 'episodes'];
 
   /// Files in the app's external files dir that are the wearer's data. Logs,
   /// cached audio and an in-flight call's journal are not.

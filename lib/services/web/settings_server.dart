@@ -448,6 +448,7 @@ class SettingsServer {
       'call_agent_device': c.read(callAgentDeviceProvider),
       'auto_answer_mode': c.read(autoAnswerModeProvider).name,
       'auto_answer_delay': c.read(autoAnswerDelayProvider),
+      'stand_down_after': c.read(standDownAfterProvider),
       'auto_answer_blocked': c.read(autoAnswerBlockedProvider),
       'auto_answer_always': c.read(autoAnswerAlwaysProvider),
       'call_agent_prompt': c.read(callAgentPromptProvider).isEmpty
@@ -540,6 +541,13 @@ class SettingsServer {
       await prefs.setString('auto_answer_mode', aaMode);
     }
     await whole('auto_answer_delay', autoAnswerDelayProvider, 6);
+    if (data.containsKey('stand_down_after')) {
+      // Only a minute count on offer; anything else is the default.
+      final v = (data['stand_down_after'] as num?)?.toInt();
+      final m = AppConstants.standDownChoices.contains(v) ? v! : AppConstants.idleBeforeCold.inMinutes;
+      c.read(standDownAfterProvider.notifier).state = m;
+      await prefs.setInt('stand_down_after', m);
+    }
     await text('auto_answer_blocked', autoAnswerBlockedProvider);
     await text('auto_answer_always', autoAnswerAlwaysProvider);
     await text('call_agent_prompt', callAgentPromptProvider);

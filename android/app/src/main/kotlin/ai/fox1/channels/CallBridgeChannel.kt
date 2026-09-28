@@ -145,6 +145,7 @@ object CallBridgeChannel {
     private var appContext: Context? = null
     private var sink: EventChannel.EventSink? = null
     private val main = Handler(Looper.getMainLooper())
+    private val connecting = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private var socket: BluetoothSocket? = null
     private var readerThread: Thread? = null
@@ -256,7 +257,19 @@ object CallBridgeChannel {
                         val requested = call.argument<Int>("stage") ?: 1
                         source = call.argument<String>("source") ?: "tone"
                         autoArm = call.argument<Boolean>("autoArm") ?: true
-                        result.success(start(address, requested))
+                        // Off the main thread: an RFCOMM connect to a board
+                        // that is not there blocks for ~20 s, and on the main
+                        // thread it froze the whole app — the launcher, and the
+                        // accessibility service that closes the stock
+                        // launcher's charging screen (1,231 frames skipped).
+                        if (!connecting.compareAndSet(false, true)) {
+                            result.success(mapOf("success" to false, "error" to "already connecting"))
+                        } else {
+                            Thread({
+                                val r = try { start(address, requested) } finally { connecting.set(false) }
+                                main.post { result.success(r) }
+                            }, "call-bridge-connect").start()
+                        }
                     }
                     "stop" -> {
                         stop("stopped by user")
@@ -451,7 +464,7 @@ object CallBridgeChannel {
     private fun start(address: String, requestedStage: Int): Map<String, Any?> {
         if (running.get()) return mapOf("success" to false, "error" to "already running")
         if (!hasBtPermission()) {
-            requestBtPermission()
+            main.post { requestBtPermission() }
             return mapOf("success" to false, "error" to "BLUETOOTH_CONNECT not granted — retry")
         }
 

@@ -13,6 +13,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.util.concurrent.atomic.AtomicInteger
 
 class Fox1AccessibilityService : AccessibilityService() {
@@ -53,11 +54,21 @@ class Fox1AccessibilityService : AccessibilityService() {
         /// Whether the system has actually bound the service in this process.
         fun isBound(): Boolean = instance != null
 
+        /// The window in front, or null — never a crash. Android throws from
+        /// inside other apps here: reading the stock launcher while its widget
+        /// host was busy raised a NullPointerException from AppWidgetService,
+        /// and, uncaught on the main thread, it killed FOX-1 twice in a row
+        /// and left the stock launcher on screen.
+        private fun AccessibilityService.safeRoot(): AccessibilityNodeInfo? =
+            try { rootInActiveWindow } catch (e: Exception) {
+                android.util.Log.w("FOX1", "could not read the screen: $e"); null
+            }
+
         /// The raw nested tree. The model no longer gets this (it reads
         /// [getCompactScreen]); kept for the Hub's developer comparison.
         fun getScreenTree(): Map<String, Any?>? {
             val service = instance ?: return null
-            val root = service.rootInActiveWindow ?: return null
+            val root = service.safeRoot() ?: return null
 
             // Read before the node can be recycled below.
             val pkg = root.packageName?.toString() ?: ""
@@ -95,7 +106,7 @@ class Fox1AccessibilityService : AccessibilityService() {
          * ([getScreenTree]), and it stays in the conversation, billed again on
          * every later turn.
          *
-         *     com.whatsapp/HomeActivity
+         *     com.whatsapp/HomeActivity · 320×385
          *     "Chats"
          *     [1] tap "Kofi · Hey, see you at 5 · 10:42"
          *     [2] tap (icon, top-right)
@@ -108,16 +119,16 @@ class Fox1AccessibilityService : AccessibilityService() {
          */
         fun getCompactScreen(keep: Boolean = true): String? {
             val service = instance ?: return null
-            val root = service.rootInActiveWindow ?: return null
+            val root = service.safeRoot() ?: return null
             if (keep) recycleNodeMap()
-            val screen = Rect().also { root.getBoundsInScreen(it) }
+            // The display, not the window: a dialog's window is smaller than
+            // the screen the model's pixel coordinates refer to.
+            val dm = service.resources.displayMetrics
+            val screen = Rect(0, 0, dm.widthPixels, dm.heightPixels)
             val pkg = root.packageName?.toString() ?: ""
-            val title = try {
-                val windows = service.windows
-                val t = windows.firstOrNull { it.isActive }?.title?.toString() ?: ""
-                windows.forEach { w -> try { @Suppress("DEPRECATION") w.recycle() } catch (_: Exception) {} }
-                t
-            } catch (_: Exception) { "" }
+            val windows = try { service.windows } catch (_: Exception) { emptyList<AccessibilityWindowInfo>() }
+            val title = windows.firstOrNull { it.isActive }?.title?.toString() ?: ""
+            val above = windowsAbove(windows, screen)
             val appLabel = try {
                 service.packageManager.getApplicationLabel(service.packageManager.getApplicationInfo(pkg, 0)).toString()
             } catch (_: Exception) { "" }
@@ -126,14 +137,67 @@ class Fox1AccessibilityService : AccessibilityService() {
             // The window title adds something only when it is not just the app's
             // name: a dialog ("Google storage backup"), a conversation ("MTN").
             if (title.isNotEmpty() && title != appLabel) out.append(" · \"").append(clip(title, LABEL_MAX)).append('"')
+            // The size, so tap and swipe coordinates (pixels) have something to go on.
+            out.append(" · ").append(screen.width()).append('×').append(screen.height())
             out.append('\n')
             val next = AtomicInteger(1)
+            // Top first. Each window is read with only what lies above it
+            // covering it, and the app last.
+            val covering = mutableListOf<Rect>()
+            for (w in above) {
+                val r = Rect().also { w.getBoundsInScreen(it) }
+                if (w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                    val whole = r.height() * 10 >= screen.height() * 9
+                    out.append(if (whole) "(keyboard open, covering the whole screen — press_enter submits, press_back hides it)\n"
+                               else "(keyboard open over the bottom of the screen — press_enter submits, press_back hides it)\n")
+                } else {
+                    val wRoot = w.root
+                    if (wRoot != null) {
+                        val label = w.title?.toString()?.takeIf { it.isNotBlank() && it != "Pop-Up Window" }
+                        out.append("— on top").append(if (label != null) ": \"${clip(label, LABEL_MAX)}\"" else "").append(" —\n")
+                        occluders = covering.toList()
+                        if (!compactNode(wRoot, screen, next, out, 0, keep)) recycleNode(wRoot)
+                        out.append("— under it —\n")
+                    }
+                }
+                covering.add(r)
+            }
+            occluders = covering.toList()
             if (!compactNode(root, screen, next, out, 0, keep)) recycleNode(root)
+            occluders = emptyList()
+            windows.forEach { w -> try { @Suppress("DEPRECATION") w.recycle() } catch (_: Exception) {} }
             if (out.length >= COMPACT_MAX_CHARS || next.get() > COMPACT_MAX_IDS) {
                 out.append("… more on screen — scroll to see it\n")
             }
             return out.toString().trimEnd()
         }
+
+        /**
+         * The windows drawn over the app, top first: its drop-downs, pop-up
+         * menus and dialogs (their own windows, never the active one), other
+         * apps' overlays, and the keyboard. Unread, a contact picker's
+         * filtered list was invisible to the agent, and on a small watch the
+         * keyboard covers the whole app while its tree still reads as tappable.
+         * Specks (a 1×1 system window) are left out.
+         */
+        private fun windowsAbove(windows: List<AccessibilityWindowInfo>, screen: Rect): List<AccessibilityWindowInfo> {
+            val active = windows.indexOfFirst { it.isActive }
+            if (active <= 0) return emptyList()
+            val minArea = screen.width() * screen.height() / 20
+            return windows.subList(0, active).filter { w ->
+                val r = Rect().also { w.getBoundsInScreen(it) }
+                r.width() * r.height() >= minArea && when (w.type) {
+                    AccessibilityWindowInfo.TYPE_APPLICATION,
+                    AccessibilityWindowInfo.TYPE_SYSTEM,
+                    AccessibilityWindowInfo.TYPE_INPUT_METHOD -> true
+                    else -> false
+                }
+            }
+        }
+
+        /// Rects of the windows above the one being read; a node wholly
+        /// inside one of them cannot be seen or touched.
+        private var occluders: List<Rect> = emptyList()
 
         @Volatile private var lastActivity = ""
         @Volatile private var lastActivityPkg = ""
@@ -159,21 +223,37 @@ class Fox1AccessibilityService : AccessibilityService() {
         private fun interactive(n: AccessibilityNodeInfo) =
             n.isClickable || n.isLongClickable || n.isEditable || n.isScrollable || n.isCheckable
 
+        /// On screen by position, not by isVisibleToUser: Compose and animated
+        /// views report false while plainly showing. Spotify's now-playing
+        /// bar and its Pause button were dropped that way, and the helper kept
+        /// tapping Play on a podcast that was playing. A view scrolled or
+        /// clipped out of sight still goes: its bounds come back empty or off
+        /// the screen.
         private fun visible(n: AccessibilityNodeInfo, screen: Rect): Boolean {
-            if (!n.isVisibleToUser) return false
             val r = Rect().also { n.getBoundsInScreen(it) }
-            return !r.isEmpty && Rect.intersects(r, screen)
+            return !r.isEmpty && Rect.intersects(r, screen) && occluders.none { it.contains(r) }
         }
 
-        /** The text of a row's non-interactive descendants, for merging into it. */
-        private fun mergedText(n: AccessibilityNodeInfo, screen: Rect, acc: LinkedHashSet<String>, depth: Int) {
+        /**
+         * The text of a row's non-interactive descendants, for merging into it.
+         *
+         * The row is visible; its parts need not be. A row peeking in at the
+         * bottom edge has its lines below the screen, and they are what tells
+         * the model which row it is — a contact picker's last row showed only
+         * "Emmanuel", not the number the agent had typed, and it never found
+         * the recipient.
+         *
+         * Text already said by the row (a description that repeats its lines)
+         * is not said again.
+         */
+        private fun mergedText(n: AccessibilityNodeInfo, acc: LinkedHashSet<String>, depth: Int) {
             if (depth > MAX_DEPTH) return
             for (i in 0 until n.childCount) {
                 val c = n.getChild(i) ?: continue
-                if (visible(c, screen) && !interactive(c)) {
+                if (!interactive(c)) {
                     val t = ownText(c)
-                    if (t.isNotEmpty()) acc.add(t)
-                    mergedText(c, screen, acc, depth + 1)
+                    if (t.isNotEmpty() && acc.none { it.contains(t) }) acc.add(t)
+                    mergedText(c, acc, depth + 1)
                 }
                 recycleNode(c)
             }
@@ -221,7 +301,7 @@ class Fox1AccessibilityService : AccessibilityService() {
                 } else {
                     val parts = LinkedHashSet<String>()
                     if (own.isNotEmpty()) parts.add(own)
-                    mergedText(n, screen, parts, depth + 1)
+                    mergedText(n, parts, depth + 1)
                     if (parts.isEmpty()) line.append(" (icon, ").append(region(n, screen)).append(')')
                     // Tap targets are often content — a message bubble, a chat
                     // preview — so they keep TEXT_MAX. Buttons are short anyway.
@@ -337,11 +417,22 @@ class Fox1AccessibilityService : AccessibilityService() {
          */
         fun getScreenSignature(): String? {
             val service = instance ?: return null
-            val root = service.rootInActiveWindow ?: return null
+            val root = service.safeRoot() ?: return null
             val sb = StringBuilder()
             sb.append(root.packageName ?: "").append('#')
             appendSignature(root, sb, 0)
             recycleNode(root)
+            // And what is drawn over it: closing the keyboard or a drop-down
+            // is a change, and was reported as none.
+            try {
+                val windows = service.windows
+                val dm = service.resources.displayMetrics
+                for (w in windowsAbove(windows, Rect(0, 0, dm.widthPixels, dm.heightPixels))) {
+                    sb.append("|w").append(w.type)
+                    w.root?.let { appendSignature(it, sb, 0); recycleNode(it) }
+                }
+                windows.forEach { w -> try { @Suppress("DEPRECATION") w.recycle() } catch (_: Exception) {} }
+            } catch (_: Exception) {}
             return sb.toString().hashCode().toString()
         }
 
@@ -371,9 +462,22 @@ class Fox1AccessibilityService : AccessibilityService() {
             return target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
         }
 
+        /// Where a real touch on [nodeId] lands: the centre of the part of it
+        /// that is on screen. For apps that ignore the accessibility click.
+        fun nodeCenter(nodeId: Int): IntArray? {
+            val node = nodeMap[nodeId] ?: return null
+            node.refresh()
+            val root = instance?.safeRoot() ?: return null
+            val screen = Rect().also { root.getBoundsInScreen(it) }
+            recycleNode(root)
+            val r = Rect().also { node.getBoundsInScreen(it) }
+            if (r.isEmpty || !r.intersect(screen)) return null
+            return intArrayOf(r.centerX(), r.centerY())
+        }
+
         fun tapByText(text: String): Boolean {
             val service = instance ?: return false
-            val root = service.rootInActiveWindow ?: return false
+            val root = service.safeRoot() ?: return false
             val nodes = root.findAccessibilityNodeInfosByText(text)
             if (nodes.isNullOrEmpty()) return false
             var target = nodes[0]
@@ -408,10 +512,14 @@ class Fox1AccessibilityService : AccessibilityService() {
             }, mainHandler)
         }
 
-        fun typeText(text: String): Boolean {
+        /// Into the input [nodeId] names, else the focused one, else the first.
+        fun typeText(text: String, nodeId: Int? = null): Boolean {
             val service = instance ?: return false
-            val root = service.rootInActiveWindow ?: return false
-            val target = findNode(root) { it.isFocused && it.isEditable }
+            val chosen = nodeId?.let { nodeMap[it] ?: return false }
+            if (chosen != null && !chosen.isEditable) return false
+            val root = service.safeRoot() ?: return false
+            val target = chosen
+                ?: findNode(root) { it.isFocused && it.isEditable }
                 ?: findNode(root) { it.isEditable }
                 ?: return false
             val args = Bundle().apply {
@@ -426,10 +534,43 @@ class Fox1AccessibilityService : AccessibilityService() {
         fun pressHome(): Boolean =
             instance?.performGlobalAction(GLOBAL_ACTION_HOME) ?: false
 
+        /**
+         * The keyboard's Enter, Done, Search, Go or Send key — what submits a
+         * search box or confirms a recipient. Setting text through
+         * accessibility is not typing, and some fields act only on that key:
+         * Messaging's recipient field kept the number as loose text until it.
+         * API 30+ has an action for it; before that, the key is found in the
+         * keyboard's own window and touched.
+         */
+        fun pressEnter(callback: (Boolean) -> Unit) {
+            val service = instance ?: return callback(false)
+            if (Build.VERSION.SDK_INT >= 30) {
+                val root = service.safeRoot()
+                val input = root?.let { findNode(it) { n -> n.isFocused && n.isEditable } }
+                if (input != null && input.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) {
+                    return callback(true)
+                }
+            }
+            val ime = try {
+                service.windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            } catch (_: Exception) { null }
+            val keys = ime?.root ?: return callback(false)
+            val key = ENTER_KEYS.firstNotNullOfOrNull { want ->
+                findNode(keys) { n -> ownText(n).equals(want, ignoreCase = true) }
+            } ?: return callback(false)
+            val r = Rect().also { key.getBoundsInScreen(it) }
+            if (r.isEmpty) return callback(false)
+            tapAtCoordinates(r.exactCenterX(), r.exactCenterY(), callback)
+        }
+
+        /// What keyboards call the key, most specific first; the full-screen
+        /// text box's own button says DONE.
+        private val ENTER_KEYS = listOf("Send", "Search", "Go", "Done", "Next", "Enter", "Return")
+
         fun scroll(direction: String, nodeId: Int?, callback: (Boolean) -> Unit) {
             // Try node-based scroll first
             val scrollNode = if (nodeId != null) nodeMap[nodeId] else {
-                val root = instance?.rootInActiveWindow
+                val root = instance?.safeRoot()
                 if (root != null) findNode(root) { it.isScrollable } else null
             }
             if (scrollNode != null && scrollNode.isScrollable) {
@@ -476,6 +617,50 @@ class Fox1AccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         AccessibilityKeeper.setWanted(this, true)
+        // A charging screen that opened while FOX-1 was down — during an
+        // update, or before the service was back — sent its event to nobody,
+        // and stayed up for an hour. Look at what is already there.
+        mainHandler.postDelayed({
+            try { closeStockLauncherIfInFront() } catch (e: Exception) {
+                android.util.Log.w("FOX1", "start check failed: $e")
+            }
+        }, 1500)
+    }
+
+    /// The stock launcher in front while FOX-1 is the home app: go home.
+    private fun closeStockLauncherIfInFront() {
+        val root = safeRoot()
+        val stock = if (root != null) {
+            val pkg = root.packageName?.toString()
+            recycleNode(root)
+            pkg != null && pkg != packageName && isOtherHome(pkg)
+        } else {
+            // The stock launcher's own screen could not be read (its widget
+            // host throws), but its window title is still known: match it
+            // against the other home apps' screen names.
+            val title = try {
+                windows.firstOrNull { it.isActive }?.title?.toString()
+            } catch (_: Exception) { null }
+            title != null && otherHomeLabels().contains(title)
+        }
+        if (stock) {
+            android.util.Log.i("FOX1", "stock launcher in front at start — going home")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
+    }
+
+    /// Screen and app names of the other home apps, while FOX-1 is the
+    /// default one.
+    private fun otherHomeLabels(): Set<String> {
+        val home = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_HOME)
+        val pm = packageManager
+        if (pm.resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName != packageName) return emptySet()
+        return pm.queryIntentActivities(home, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .flatMap { listOf(it.loadLabel(pm).toString(), it.activityInfo.applicationInfo.loadLabel(pm).toString()) }
+            .toSet()
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
@@ -483,6 +668,14 @@ class Fox1AccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Runs on the main thread for every window change on the device: an
+        // exception here would take the launcher down.
+        try { handleEvent(event) } catch (e: Exception) {
+            android.util.Log.w("FOX1", "accessibility event failed: $e")
+        }
+    }
+
+    private fun handleEvent(event: AccessibilityEvent?) {
         // The activity in front — the compact screen's header. Window-state
         // events also fire for dialogs and menus, so only a class Android
         // knows as an activity counts.
@@ -492,10 +685,41 @@ class Fox1AccessibilityService : AccessibilityService() {
         val isActivity = activityClasses.getOrPut("$pkg/$cls") {
             try { packageManager.getActivityInfo(ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
         }
+        if (pkg != packageName && cls.contains("Charg", ignoreCase = true)) {
+            android.util.Log.i("FOX1", "window $pkg/$cls · activity=$isActivity")
+        }
         if (isActivity) {
             lastActivityPkg = pkg
             lastActivity = cls.substringAfterLast('.')
+            if (isStockChargeScreen(pkg, cls)) {
+                android.util.Log.i("FOX1", "stock launcher's charge screen $pkg/$cls over FOX-1 — going home")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
         }
+    }
+
+    /**
+     * The watch's own launcher stays installed and running as a system app
+     * after FOX-1 becomes the home screen, and it opens its charging screen
+     * (`com.dw.launcher/.activity.ChargeEffectActivity`) whenever power is
+     * connected. Back does not close it; Home does, and comes back to FOX-1.
+     * Only while FOX-1 is the default home, and only a charging activity of
+     * another home app, so its power-off menu and settings are left alone.
+     */
+    private fun isStockChargeScreen(pkg: String, cls: String): Boolean {
+        if (pkg == packageName || !cls.substringAfterLast('.').contains("Charg", ignoreCase = true)) return false
+        return isOtherHome(pkg)
+    }
+
+    /// [pkg] is another home app, and FOX-1 is the default one.
+    private fun isOtherHome(pkg: String): Boolean {
+        val home = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_HOME)
+        val pm = packageManager
+        val default = pm.resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName
+        if (default != packageName) return false
+        return pm.queryIntentActivities(home, 0).any { it.activityInfo.packageName == pkg }
     }
     override fun onInterrupt() {}
 }

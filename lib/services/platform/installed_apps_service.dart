@@ -5,15 +5,57 @@ import '../../models/app_info.dart';
 class InstalledAppsService {
   static const _channel = MethodChannel('ai.fox1/apps');
 
-  Future<List<AppInfo>> getInstalledApps() async {
+  /// Names only, kept a few minutes: the agent looks an app up on every
+  /// launch, and drawing every icon each time for a name was wasted work.
+  static Future<List<AppInfo>>? _names;
+  static DateTime _namesAt = DateTime(0);
+
+  Future<List<AppInfo>> getAppNames() {
+    if (_names == null || DateTime.now().difference(_namesAt) > const Duration(minutes: 5)) {
+      _namesAt = DateTime.now();
+      _names = getInstalledApps(icons: false);
+    }
+    return _names!;
+  }
+
+  /// Whether any app is playing audio right now.
+  Future<bool> isMusicActive() async {
     try {
-      final List<dynamic> result = await _channel.invokeMethod('getInstalledApps');
+      return await _channel.invokeMethod<bool>('isMusicActive') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<AppInfo>> getInstalledApps({bool icons = true}) async {
+    try {
+      final List<dynamic> result =
+          await _channel.invokeMethod('getInstalledApps', {'icons': icons});
       return result
           .map((e) => AppInfo.fromMap(e as Map<dynamic, dynamic>))
           .toList()
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     } catch (e) {
       return [];
+    }
+  }
+
+  /// An app opened at the right place in one step (see
+  /// `InstalledAppsChannel.openShortcut`): `kind` is play, search, navigate
+  /// or whatsapp.
+  Future<Map<String, dynamic>> openShortcut(String kind,
+      {String? package, String query = '', String? number, String? text}) async {
+    try {
+      final r = await _channel.invokeMethod('openShortcut', {
+        'kind': kind,
+        'package': package,
+        'query': query,
+        'number': number,
+        'text': text,
+      });
+      return Map<String, dynamic>.from(r as Map);
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
     }
   }
 

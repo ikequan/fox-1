@@ -74,6 +74,12 @@ class ScreenAutomationService {
   static String packageOf(String screen) =>
       screen.split('\n').first.split(RegExp(r'[/ ]')).first;
 
+  /// Whether a compact screen has anything under its header. An app that
+  /// has just come to the front has a window but, for a second or more,
+  /// nothing drawn in it: Spotify read as its header alone, twice, and the
+  /// agent decided there was nothing there.
+  static bool hasContent(String screen) => screen.trim().contains('\n');
+
   /// The raw nested accessibility tree — what the model used to get. Only the
   /// Hub's developer comparison reads it now. Renumbers the ids like [getScreen].
   Future<Map<String, dynamic>> getScreenTree() async {
@@ -82,6 +88,18 @@ class ScreenAutomationService {
       return Map<String, dynamic>.from(result as Map);
     } catch (e) {
       return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// Where a real touch on [nodeId] lands, or null when it is gone or off
+  /// screen.
+  Future<({double x, double y})?> nodeCenter(int nodeId) async {
+    try {
+      final r = await _channel.invokeMethod<List>('nodeCenter', {'node_id': nodeId});
+      if (r == null || r.length != 2) return null;
+      return (x: (r[0] as num).toDouble(), y: (r[1] as num).toDouble());
+    } catch (_) {
+      return null;
     }
   }
 
@@ -111,9 +129,9 @@ class ScreenAutomationService {
     }
   }
 
-  Future<Map<String, dynamic>> typeText(String text) async {
+  Future<Map<String, dynamic>> typeText(String text, {int? nodeId}) async {
     try {
-      final result = await _channel.invokeMethod('typeText', {'text': text});
+      final result = await _channel.invokeMethod('typeText', {'text': text, 'node_id': ?nodeId});
       return Map<String, dynamic>.from(result as Map);
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -123,6 +141,15 @@ class ScreenAutomationService {
   Future<Map<String, dynamic>> pressBack() async {
     try {
       final result = await _channel.invokeMethod('pressBack');
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> pressEnter() async {
+    try {
+      final result = await _channel.invokeMethod('pressEnter');
       return Map<String, dynamic>.from(result as Map);
     } catch (e) {
       return {'success': false, 'error': e.toString()};

@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../config/constants.dart';
 import '../providers/providers.dart';
+import '../services/agent/screen_capture.dart';
 import '../services/agent/agent_bridge.dart';
 import '../services/camera/watch_camera_service.dart';
 import '../services/call/auto_answer.dart';
@@ -283,6 +284,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(autoAnswerModeProvider).name,
     );
     await prefs.setInt('auto_answer_delay', ref.read(autoAnswerDelayProvider));
+    await prefs.setInt('stand_down_after', ref.read(standDownAfterProvider));
     final aaBlocked = _aaBlockedController.text.trim();
     ref.read(autoAnswerBlockedProvider.notifier).state = aaBlocked;
     await prefs.setString('auto_answer_blocked', aaBlocked);
@@ -432,6 +434,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 }
               },
             ),
+          ),
+
+          // How long a quiet conversation lasts before it ends.
+          const SizedBox(height: 16),
+          const _SectionHeader('Stand down after'),
+          _buildDropdownContainer(
+            child: DropdownButton<int>(
+              value: AppConstants.standDownChoices.contains(ref.watch(standDownAfterProvider))
+                  ? ref.watch(standDownAfterProvider)
+                  : AppConstants.idleBeforeCold.inMinutes,
+              isExpanded: true,
+              dropdownColor: const Color(0xFF1A1A1A),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              items: [
+                for (final m in AppConstants.standDownChoices)
+                  DropdownMenuItem(value: m, child: Text(m == 1 ? '1 minute of quiet' : '$m minutes of quiet')),
+              ],
+              onChanged: (v) {
+                if (v != null) ref.read(standDownAfterProvider.notifier).state = v;
+              },
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Then the conversation ends and she keeps its key points. Shorter '
+            'costs less; the next hold takes a second longer to answer.',
+            style: TextStyle(color: Colors.white38, fontSize: 10),
           ),
 
           // AI Persona section. Separate from the system prompt because the
@@ -1438,6 +1467,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ref.read(developerModeProvider.notifier).state = on;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('developer_mode', on);
+    // The screen log holds whatever was on screen; it goes with developer mode.
+    if (!on) await ScreenCapture.clear();
   }
 
   Widget _devButton(String label, String route, String note) => Column(

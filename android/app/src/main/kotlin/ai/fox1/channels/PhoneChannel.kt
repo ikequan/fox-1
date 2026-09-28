@@ -1,6 +1,13 @@
 package ai.fox1.channels
 
+import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.ContentValues
+import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
+import android.telephony.SmsManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -25,11 +32,23 @@ object PhoneChannel {
                     when (call.method) {
                         "getContacts" -> {
                             val query = call.argument<String>("query") ?: ""
-                            result.success(getContacts(context, query))
+                            Background.run(Background.io, result) { it.success(getContacts(context, query)) }
+                        }
+                        "sendSms" -> {
+                            val to = call.argument<String>("to") ?: ""
+                            val text = call.argument<String>("text") ?: ""
+                            if (to.isBlank() || text.isBlank()) {
+                                result.success(mapOf<String, Any>("success" to false, "error" to "Need a number and a message"))
+                                return@setMethodCallHandler
+                            }
+                            sendSms(context, to, text) { ok, why ->
+                                result.success(if (ok) mapOf<String, Any>("success" to true)
+                                               else mapOf<String, Any>("success" to false, "error" to why))
+                            }
                         }
                         "getCallHistory" -> {
                             val limit = call.argument<Int>("limit") ?: 20
-                            result.success(getCallHistory(context, limit))
+                            Background.run(Background.io, result) { it.success(getCallHistory(context, limit)) }
                         }
                         "makeCall" -> {
                             val phoneNumber = call.argument<String>("phone_number") ?: ""
@@ -212,5 +231,50 @@ object PhoneChannel {
 
         val results = context.contentResolver.applyBatch(ContactsContract.AUTHORITY, ops)
         return results.firstOrNull()?.uri?.lastPathSegment
+    }
+
+    /**
+     * Sends a text with no screen at all, and answers only once the network
+     * has taken every part — "sent" means sent, not "handed to Android".
+     * Android files it in the conversation as usual, so it shows in Messaging.
+     */
+    private fun sendSms(context: Context, to: String, text: String, done: (Boolean, String) -> Unit) {
+        val sms = SmsManager.getDefault()
+        val parts = sms.divideMessage(text)
+        val action = "ai.fox1.SMS_SENT." + System.nanoTime()
+        val handler = Handler(Looper.getMainLooper())
+        var left = parts.size
+        var finished = false
+        lateinit var receiver: BroadcastReceiver
+        fun finish(ok: Boolean, why: String) {
+            if (finished) return
+            finished = true
+            handler.removeCallbacksAndMessages(null)
+            try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            done(ok, why)
+        }
+        receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                when (resultCode) {
+                    Activity.RESULT_OK -> if (--left == 0) finish(true, "")
+                    SmsManager.RESULT_ERROR_NO_SERVICE -> finish(false, "No mobile signal")
+                    SmsManager.RESULT_ERROR_RADIO_OFF -> finish(false, "The mobile radio is off (airplane mode?)")
+                    else -> finish(false, "The network refused it (code $resultCode)")
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)
+        else context.registerReceiver(receiver, IntentFilter(action))
+        val flags = PendingIntent.FLAG_ONE_SHOT or (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)
+        val sent = ArrayList(parts.indices.map {
+            PendingIntent.getBroadcast(context, it, Intent(action).setPackage(context.packageName), flags)
+        })
+        try {
+            sms.sendMultipartTextMessage(to, null, parts, sent, null)
+        } catch (e: Exception) {
+            finish(false, "Could not send: ${e.message}")
+            return
+        }
+        handler.postDelayed({ finish(false, "No word from the network after 30 s — it may still go out") }, 30_000)
     }
 }

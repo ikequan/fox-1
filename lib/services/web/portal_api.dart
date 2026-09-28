@@ -81,6 +81,9 @@ class PortalApi {
       ..get('/api/dev/usage', _devUsage)
       ..get('/api/dev/screen', _devScreen)
       ..post('/api/dev/screen-tool', _devScreenTool)
+      ..get('/api/dev/screens', _devScreens)
+      ..post('/api/dev/screens/clear', _devScreensClear)
+      ..get('/dev/screens', _devScreensPage)
       ..post('/api/portal/stop', _stop);
   }
 
@@ -650,7 +653,7 @@ class PortalApi {
 
   /// The screen tools the developer endpoint may run.
   static const _devScreenTools = {
-    'get_screen', 'tap', 'scroll', 'type_text', 'press_back', 'press_home', 'launch_app',
+    'get_screen', 'tap', 'scroll', 'type_text', 'press_back', 'press_enter', 'app_shortcut', 'send_sms', 'do_on_device', 'close_app', 'close_all_apps', 'press_home', 'launch_app',
   };
 
   /// Developer mode only: `{"name":"tap","args":{"node_id":3}}` runs one
@@ -667,8 +670,30 @@ class PortalApi {
     final name = '${body['name'] ?? ''}';
     if (!_devScreenTools.contains(name)) return _fail(400, 'not a screen tool: $name');
     final args = body['args'] is Map ? Map<String, dynamic>.from(body['args'] as Map) : <String, dynamic>{};
-    return _json(await NativeToolsBridge().handleToolCall(name, args));
+    return _json(await NativeToolsBridge(helperKey: () => globalContainer.read(geminiApiKeyProvider))
+        .handleToolCall(name, args));
   }
+
+  /// Developer mode only: the screen log — each `get_screen` the model made,
+  /// what it was given beside the raw tree. `?day=YYYY-MM-DD`, default the
+  /// newest.
+  Future<shelf.Response> _devScreens(shelf.Request r) async {
+    if (!globalContainer.read(developerModeProvider)) return _fail(403, 'developer mode is off');
+    final days = await ScreenCapture.days();
+    final day = r.url.queryParameters['day'] ?? (days.isEmpty ? '' : days.first);
+    return _json({'days': days, 'day': day, 'reads': await ScreenCapture.read(day)});
+  }
+
+  Future<shelf.Response> _devScreensClear(shelf.Request r) async {
+    if (!globalContainer.read(developerModeProvider)) return _fail(403, 'developer mode is off');
+    await ScreenCapture.clear();
+    return _ok();
+  }
+
+  Future<shelf.Response> _devScreensPage(shelf.Request r) async => shelf.Response.ok(
+        _screensHtml,
+        headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'},
+      );
 
   /// What the current conversation's turns cost, from Google's counts, and
   /// the screen reads kept since the last `/api/dev/task`.
@@ -699,3 +724,76 @@ class PortalApi {
   static shelf.Response _fail(int status, String error) =>
       _json({'ok': false, 'error': error}, status: status);
 }
+
+/// `/dev/screens`: each read the model made — what it was given on the left,
+/// the raw tree on the right, with any raw text the model was not given
+/// marked. Self-contained: the phone is often on the device's hotspot.
+const _screensHtml = r'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Screen log</title>
+<style>
+:root{--bg:#0e1113;--card:#171b1e;--ink:#e6ecef;--mute:#8a969c;--line:#262d31;--acc:#3ddbb0;--warn:#ffb454}
+@media (prefers-color-scheme: light){:root{--bg:#f5f7f8;--card:#fff;--ink:#111;--mute:#5d686e;--line:#dde3e6;--acc:#0a8f6c;--warn:#b35c00}}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,sans-serif}
+header{position:sticky;top:0;background:var(--bg);padding:12px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+h1{font-size:16px;margin:0 auto 0 0}
+select,button{font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+main{padding:12px 16px;display:grid;gap:14px}
+.read{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.top{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:12px;flex-wrap:wrap;color:var(--mute)}
+.top b{color:var(--ink)}
+.cols{display:grid;grid-template-columns:1fr 1fr}
+@media (max-width:800px){.cols{grid-template-columns:1fr}}
+.col{padding:10px 12px;min-width:0}
+.col+.col{border-left:1px solid var(--line)}
+@media (max-width:800px){.col+.col{border-left:0;border-top:1px solid var(--line)}}
+.col h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:0 0 6px}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.45 ui-monospace,Menlo,monospace}
+.miss{color:var(--warn)}
+.flag{color:var(--acc)}
+.empty{color:var(--mute);padding:24px 16px}
+</style></head><body>
+<header><h1>Screen log</h1><select id="day"></select><button id="clear">Delete log</button></header>
+<main id="list"><p class="empty">Loading…</p></main>
+<script>
+const $=s=>document.querySelector(s);
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+function tree(raw,compact){
+  const pre=el('pre');
+  const walk=(n,d)=>{
+    const b=n.bounds||{};const t=n.text||n.description||'';
+    const flags=['clickable','editable','scrollable','focused'].filter(k=>n[k]).join(',');
+    const line=el('div');
+    line.append(document.createTextNode('  '.repeat(d)+n.id+' '+(n.class||'')+' '));
+    if(flags)line.append(el('span','flag',flags+' '));
+    line.append(document.createTextNode('['+b.left+','+b.top+','+b.right+','+b.bottom+']'));
+    if(t){const lost=!compact.includes(t.replace(/\n/g,' ').slice(0,40));
+      line.append(el('span',lost?'miss':'',' "'+t.replace(/\n/g,' ')+'"'+(lost?'  ← not given to the model':'')))}
+    pre.append(line);(n.children||[]).forEach(c=>walk(c,d+1));
+  };
+  (raw.nodes||[]).forEach(n=>walk(n,0));return pre;
+}
+async function load(day){
+  const r=await fetch('/api/dev/screens'+(day?'?day='+day:''),{credentials:'same-origin'});
+  if(r.status===401){location.href='/#/login';return}
+  const d=await r.json();const list=$('#list');list.textContent='';
+  if(!d.days){list.append(el('p','empty',d.error||'Developer mode is off'));return}
+  const sel=$('#day');sel.textContent='';
+  d.days.forEach(x=>{const o=el('option',null,x);o.value=x;o.selected=x===d.day;sel.append(o)});
+  if(!d.reads.length){list.append(el('p','empty','No screen reads yet. Every get_screen the assistant makes while developer mode is on is logged here.'));return}
+  d.reads.slice().reverse().forEach(x=>{
+    const card=el('section','read');const top=el('div','top');
+    top.append(el('b',null,'Read '+x.read),el('span',null,new Date(x.at).toLocaleTimeString()),
+      el('span',null,'model got ≈'+x.compactTokens+' tokens'),el('span',null,'raw tree ≈'+x.rawTokens+' tokens'));
+    const cols=el('div','cols');
+    const a=el('div','col');a.append(el('h2',null,'What the model got'),el('pre',null,x.compact));
+    const b=el('div','col');b.append(el('h2',null,'Raw tree'),tree(x.raw||{},x.compact));
+    cols.append(a,b);card.append(top,cols);list.append(card);
+  });
+}
+$('#day').onchange=e=>load(e.target.value);
+$('#clear').onclick=async()=>{if(!confirm('Delete the whole screen log?'))return;
+  await fetch('/api/dev/screens/clear',{method:'POST',credentials:'same-origin'});load()};
+load();
+</script></body></html>''';

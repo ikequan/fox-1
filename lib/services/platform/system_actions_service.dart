@@ -46,6 +46,16 @@ class SystemActionsService {
     }
   }
 
+  /// The display stays up while a conversation is live, without being turned
+  /// on (see `SystemActionsChannel.holdForConversation`).
+  static Future<bool> holdForConversation(bool on) async {
+    try {
+      return await _channel.invokeMethod<bool>('holdForConversation', {'on': on}) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<bool> releaseScreenLock() async {
     try {
       return await _channel.invokeMethod<bool>('releaseScreenLock') ?? false;

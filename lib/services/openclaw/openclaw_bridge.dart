@@ -27,7 +27,11 @@ class OpenClawBridge implements AgentBridge {
         {
           'name': 'execute',
           'description':
-              'Execute a task for the user via OpenClaw. OpenClaw has 56+ '
+              'Execute a task for the user via OpenClaw — ONLY when the wearer '
+                  'explicitly asks for OpenClaw or the relay agent, or for work '
+                  'nothing on the device can do. Anything done with an app on the '
+                  'device is done with your own tools, even when it gets difficult: '
+                  'OpenClaw runs on another computer. OpenClaw has 56+ '
                   'skills including: web search, sending messages (WhatsApp, '
                   'Telegram, iMessage), managing lists and reminders, '
                   'controlling smart home devices, taking notes, and more. '

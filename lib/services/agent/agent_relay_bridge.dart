@@ -30,6 +30,7 @@ class AgentRelayBridge implements AgentBridge {
       'name': 'execute',
       'description':
           'Execute a task for the user via Agent Relay. '
+          'ONLY when the wearer explicitly asks for the relay agent ("use the relay", "ask the agent"), or for work nothing on the device can do. Anything done with an app — Spotify, WhatsApp, YouTube, messages, calls — is done on the device with your own tools, even when it gets difficult: this agent runs on another computer, not on the device, and cannot see or play anything here. '
           'The agent can perform web searches, send messages, manage '
           'lists and reminders, control smart home devices, and more. '
           'Describe the task in natural language. Returns a job_id — then poll '

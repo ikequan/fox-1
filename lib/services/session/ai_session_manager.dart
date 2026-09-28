@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,9 +13,11 @@ import '../agent/native_tools_bridge.dart';
 import '../audio/audio_manager.dart';
 import '../camera/watch_camera_service.dart';
 import '../gemini/gemini_live_client.dart';
+import '../memory/episodes.dart';
 import '../openclaw/openclaw_bridge.dart';
 import '../platform/installed_apps_service.dart';
 import 'ai_session.dart';
+import '../conversation/conversation_store.dart';
 import '../platform/phone_service.dart';
 import '../notes/note_tools.dart';
 import '../ring/ring_tools.dart';
@@ -125,6 +128,8 @@ class AISessionManager {
     await memory.load();
     final ringService = _ref.read(ringServiceProvider);
     final noteStore = _ref.read(noteStoreProvider);
+    final episodes = _ref.read(episodeStoreProvider);
+    final conversations = _ref.read(conversationStoreProvider);
     // Notes outlive a forgotten ring, so their tools stay while any exist.
     final hasNotes = !await noteStore.isEmpty;
     final nativeBridge = NativeToolsBridge(
@@ -132,6 +137,15 @@ class AISessionManager {
       // Health tools only while a ring is paired (see _currentSignature).
       ring: ringService.paired ? RingTools.of(ringService) : null,
       notes: ringService.paired || hasNotes ? NoteTools(noteStore) : null,
+      episodes: EpisodeTools(episodes, conversations),
+      // Screen work goes to the helper, out of the voice conversation.
+      helperKey: () => _ref.read(geminiApiKeyProvider),
+      onCost: (source, usd) {
+        final meter = _session?.gemini.usage;
+        if (meter == null) return;
+        meter.addExtra(source, usd);
+        debugPrint('[COST] $source: \$${usd.toStringAsFixed(4)} · session ${meter.totalLine}');
+      },
       portal: (on) => _ref.read(portalServiceProvider).toolCall(on),
       memory: memory,
       dialed: _ref.read(dialedNumbersProvider),
@@ -147,7 +161,7 @@ class AISessionManager {
     );
 
     // Done once per session rather than on every screen entry.
-    final apps = await InstalledAppsService().getInstalledApps();
+    final apps = await InstalledAppsService().getAppNames();
     final appNames = apps.map((a) => a.name).join(', ');
 
     final name = _ref.read(assistantNameProvider);
@@ -169,6 +183,12 @@ class AISessionManager {
       promptParts.add('\n[Installed Apps]\n$appNames');
     }
 
+    // Today's earlier conversations, as key points. Not the conversations
+    // themselves: an ended one is not resumed (see _conversationEnded).
+    await _rememberEnded(within: const Duration(seconds: 4));
+    final earlier = episodeBriefing(await episodes.on(DateTime.now()));
+    if (earlier.isNotEmpty) promptParts.add('\n$earlier');
+
     // Anything a call left for the wearer that they have not heard. Told to
     // the agent as an instruction so it leads with the message rather than
     // waiting to be asked — the wearer should not have to know to ask.
@@ -177,6 +197,9 @@ class AISessionManager {
     if (!pending.isEmpty) {
       promptParts.add('\n${pending.briefing(wearer: userProfile)}');
     }
+
+    final tools = nativeBridge.toolDeclarations;
+    _logSetupSize(promptParts, persona, basePrompt, userProfile, appNames, earlier, tools);
 
     final selectedModel = _ref.read(geminiModelProvider);
     final modelId = AppConstants.supportedModel(selectedModel);
@@ -190,13 +213,15 @@ class AISessionManager {
           model: modelId,
           voice: _ref.read(geminiVoiceProvider),
           systemPrompt: promptParts.join('\n'),
-          toolDeclarations: nativeBridge.toolDeclarations,
+          toolDeclarations: tools,
         ),
       ),
       agentBridge: nativeBridge,
       cameraConfig: _currentCameraConfig(),
       onRequestHome: () =>
           _ref.read(goHomeSignalProvider.notifier).state++,
+      idleLimit: () => Duration(minutes: _ref.read(standDownAfterProvider)),
+      onConversationEnded: () => unawaited(_conversationEnded()),
     );
 
     // The bridge is built first so its declarations reach the setup message;
@@ -209,9 +234,11 @@ class AISessionManager {
     // done is exactly the failure this avoids.
     final briefer = _ref.read(wearerBrieferProvider);
     briefer.reset();
-    final conversations = _ref.read(conversationStoreProvider);
     final dialed = _ref.read(dialedNumbersProvider);
     session.transcript.listen((e) {
+      if (e.role != TranscriptRole.system && e.text.trim().isNotEmpty) {
+        _conversationStart ??= e.timestamp;
+      }
       // Kept for the portal's conversation history.
       conversations.addTranscript(e.role.name, e.text, e.timestamp);
       if (e.role == TranscriptRole.user && e.text.trim().isNotEmpty) {
@@ -238,6 +265,139 @@ class AISessionManager {
 
     _builtSignature = signature;
     return session;
+  }
+
+  /// When the conversation in progress began — its first words.
+  DateTime? _conversationStart;
+
+  /// Episodes being written, so a build can wait for today's points.
+  Future<void>? _remembering;
+  bool _caughtUp = false;
+
+  /// A quiet conversation has ended. It is remembered as key points, and the
+  /// session is let go, so the next wake builds a fresh one briefed with
+  /// them rather than resuming the whole conversation — which Gemini then
+  /// re-bills on every turn.
+  Future<void> _conversationEnded() async {
+    // Like any stand-down, back to the watch face. Only the launcher's own
+    // page moves: an app the agent opened stays in front.
+    _ref.read(goHomeSignalProvider.notifier).state++;
+    // Kept past the session, so remembering it counts in its total.
+    final meter = _session?.gemini.usage;
+    final start = _conversationStart;
+    _conversationStart = null;
+    await _disposeSession();
+    if (start != null) {
+      final conversations = _ref.read(conversationStoreProvider);
+      await conversations.flush();
+      final said = await _saidSince(start);
+      final asked = [
+        for (final s in said)
+          if (s.role == 'user') s.text.length > 120 ? '${s.text.substring(0, 120)}…' : s.text,
+      ].take(3).toList();
+      if (asked.isNotEmpty) {
+        await _ref.read(episodeStoreProvider).save(Episode(start: start, end: said.last.at, asked: asked));
+      }
+    }
+    await _rememberEnded();
+    final written = start == null ? null : _memoryUsd.remove(start.toIso8601String());
+    if (meter != null && start != null) {
+      if (written != null) meter.addExtra('key points', written);
+      if (meter.totalUsd > 0) {
+        final end = DateTime.now();
+        String hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+        debugPrint('[COST] conversation ${hm(start)}–${hm(end)}: ${meter.totalLine}');
+      }
+    }
+  }
+
+  /// What writing each episode's key points cost, by episode id, until its
+  /// conversation's total is logged.
+  final Map<String, double> _memoryUsd = {};
+
+  Future<List<Said>> _saidSince(DateTime start, [DateTime? end]) async {
+    final conversations = _ref.read(conversationStoreProvider);
+    final days = {ConversationStore.dayKey(start), ConversationStore.dayKey(end ?? DateTime.now())};
+    final out = <Said>[];
+    for (final d in days) {
+      out.addAll(await conversations.entriesOn(DateTime.parse(d)));
+    }
+    return [
+      for (final s in out)
+        if (!s.at.isBefore(start.subtract(const Duration(seconds: 1))) &&
+            (end == null || !s.at.isAfter(end.add(const Duration(seconds: 1)))))
+          s,
+    ];
+  }
+
+  /// Writes every episode still waiting for its points. [within] caps how
+  /// long a caller waits; the writing carries on regardless.
+  Future<void> _rememberEnded({Duration? within}) async {
+    final run = _remembering ??= _writeEpisodes().whenComplete(() => _remembering = null);
+    if (within == null) return run;
+    try {
+      await run.timeout(within);
+    } catch (_) {}
+  }
+
+  Future<void> _writeEpisodes() async {
+    final store = _ref.read(episodeStoreProvider);
+    if (!_caughtUp) {
+      _caughtUp = true;
+      await _catchUp(store);
+    }
+    final writer = EpisodeWriter(apiKey: () => _ref.read(geminiApiKeyProvider));
+    final name = _ref.read(assistantNameProvider);
+    for (final e in await store.pending()) {
+      final said = await _saidSince(e.start, e.end);
+      if (said.isEmpty) continue;
+      try {
+        final usd = await writer.write(e, said, name: name);
+        _memoryUsd[e.id] = usd;
+        debugPrint('[MEMORY] remembered ${e.when}: ${e.gist} (${e.points.length} points)');
+        debugPrint('[COST] key points for ${e.when}: \$${usd.toStringAsFixed(4)}');
+      } on EpisodeWriteError catch (err) {
+        if (!err.network) e.strikes++;
+        debugPrint('[MEMORY] could not remember ${e.when} yet: $err');
+        if (err.network) {
+          await store.save(e);
+          return; // Offline: the rest would fail the same way.
+        }
+      }
+      await store.save(e);
+    }
+  }
+
+  /// Conversations from before a restart that ended without being
+  /// remembered become episodes too — memory is never lost to a crash.
+  Future<void> _catchUp(EpisodeStore store) async {
+    final conversations = _ref.read(conversationStoreProvider);
+    final known = await store.recent();
+    final now = DateTime.now();
+    for (final day in [now.subtract(const Duration(days: 1)), now]) {
+      for (final c in await conversations.on(day)) {
+        if (now.difference(c.end) < const Duration(minutes: 1)) continue;
+        if (known.any((e) => !e.start.isAfter(c.end) && !e.end.isBefore(c.start))) continue;
+        final asked = [for (final s in c.entries) if (s.role == 'user') s.text].take(3).toList();
+        if (asked.isEmpty) continue;
+        await store.save(Episode(start: c.start, end: c.end, asked: asked));
+      }
+    }
+  }
+
+  /// What the fixed part of every turn is made of — re-sent, and billed, on
+  /// every step of every turn. About four characters to a token.
+  void _logSetupSize(List<String> prompt, String persona, String system, String profile,
+      String apps, String earlier, List<Map<String, dynamic>> tools) {
+    int t(int chars) => (chars / 4).round();
+    final promptChars = prompt.join('\n').length;
+    final toolChars = jsonEncode(tools).length;
+    final biggest = [...tools]..sort((a, b) => jsonEncode(b).length.compareTo(jsonEncode(a).length));
+    debugPrint('[SESSION_MGR] setup ≈ ${t(promptChars + toolChars)} tokens: '
+        'prompt ≈ ${t(promptChars)} (persona ${t(persona.length)} · system ${t(system.length)} · '
+        'profile ${t(profile.length)} · apps ${t(apps.length)} · earlier today ${t(earlier.length)}) · '
+        '${tools.length} tools ≈ ${t(toolChars)} (largest: '
+        '${biggest.take(5).map((d) => '${d['name']} ${t(jsonEncode(d).length)}').join(', ')})');
   }
 
   /// Keeps [mascotStateProvider] on what the session is actually doing, so

@@ -2167,7 +2167,7 @@ PAGES.memory = function pageMemory(view) {
 /* ============================================================== settings */
 
 const SET_BOOL = new Set(['call_agent_on_duty', 'camera_mirror']);
-const SET_INT = new Set(['auto_answer_delay', 'openclaw_port', 'camera_rotation', 'camera_quality', 'watch_font_weight']);
+const SET_INT = new Set(['auto_answer_delay', 'stand_down_after', 'openclaw_port', 'camera_rotation', 'camera_quality', 'watch_font_weight']);
 const CAM_KEYS = ['camera_resolution', 'camera_quality', 'camera_rotation', 'camera_mirror', 'camera_aspect_ratio'];
 const WF_KEYS = ['watch_font_family', 'watch_font_weight', 'watch_font_size_factor', 'watch_time_x', 'watch_time_y'];
 const LIVE = new Set([...CAM_KEYS, ...WF_KEYS, 'mascot']);
@@ -2357,7 +2357,9 @@ PAGES.settings = function pageSettings(view) {
     const assistant = sectionCard('Assistant', 'sparkle', null,
       fText('gemini_api_key', 'Gemini API key', { secret: true, mono: true, placeholder: 'AIza…', hint: `Kept on the device. ${aiName()} uses it to reach Gemini Live.` }),
       h('div', { class: 'field' }, h('label', { class: 'label', for: 's-gemini_model', text: 'Model' }), modelSel, modelHint),
-      fSelect('gemini_voice', 'Voice', voices, { hint: `How ${aiName()} sounds, on the device and on calls.` }));
+      fSelect('gemini_voice', 'Voice', voices, { hint: `How ${aiName()} sounds, on the device and on calls.` }),
+      fSelect('stand_down_after', 'Stand down after', [1, 2, 5, 10].map((m) => ({ value: String(m), label: m === 1 ? '1 minute of quiet' : `${m} minutes of quiet` })),
+        { hint: `Then the conversation ends and ${aiName()} keeps its key points. Shorter costs less; the next hold takes a second or two longer to answer.` }));
 
     /* ---- Prompts */
     const persona = sectionCard('AI Persona', 'user', null,

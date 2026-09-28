@@ -119,17 +119,37 @@ class UsageMeter {
   final LivePrices prices;
   final List<UsageSample> samples = [];
 
-  double get totalUsd => samples.fold(0.0, (a, s) => a + s.cost(prices));
+  /// What the conversation cost outside the voice model, by source —
+  /// `helper` (do_on_device), `key points` (remembering it) — so the session
+  /// total is everything it cost, not just the Live turns.
+  final Map<String, double> extras = {};
+
+  double get voiceUsd => samples.fold(0.0, (a, s) => a + s.cost(prices));
+  double get totalUsd => voiceUsd + extras.values.fold(0.0, (a, b) => a + b);
 
   void add(UsageSample s) => samples.add(s);
-  void clear() => samples.clear();
+  void addExtra(String source, double usd) => extras[source] = (extras[source] ?? 0) + usd;
+  void clear() {
+    samples.clear();
+    extras.clear();
+  }
+
+  /// `$0.0712 (voice $0.0500 · helper $0.0212)`, or just the total when it
+  /// was all voice.
+  String get totalLine {
+    final t = '\$${totalUsd.toStringAsFixed(4)}';
+    if (extras.isEmpty) return t;
+    final parts = ['voice \$${voiceUsd.toStringAsFixed(4)}',
+      for (final e in extras.entries) '${e.key} \$${e.value.toStringAsFixed(4)}'];
+    return '$t (${parts.join(' · ')})';
+  }
 
   /// `turn 12: in 48,210 (TEXT 41,900 · AUDIO 6,310) · out 212 (AUDIO 212) · $0.0540 · session $0.4102`
   String describe(UsageSample s) {
     String mods(Map<String, int> m) => m.entries.map((e) => '${e.key} ${_n(e.value)}').join(' · ');
     return 'turn ${samples.length}: in ${_n(s.promptTokens)} (${mods({...s.prompt, ...s.toolUsePrompt})})'
         ' · out ${_n(s.responseTokens)} (${mods(s.response)}${s.thoughts > 0 ? ' · thinking ${_n(s.thoughts)}' : ''})'
-        ' · \$${s.cost(prices).toStringAsFixed(4)} · session \$${totalUsd.toStringAsFixed(4)}';
+        ' · \$${s.cost(prices).toStringAsFixed(4)} · session $totalLine';
   }
 
   static String _n(int n) =>

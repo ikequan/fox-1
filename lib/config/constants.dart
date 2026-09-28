@@ -24,13 +24,17 @@ class AppConstants {
 
   // ─── Timeouts ───────────────────────────────────────────────────────────
   // Session lifecycle & power
-  /// How long a quiet conversation keeps its socket. Longer than it was (2 min)
-  /// because hold-to-talk is judged on how fast she answers: a warm session
-  /// hears the wearer immediately, a cold one spends a second or two
-  /// connecting while they are already speaking. The socket is idle in the
-  /// meantime — no audio, no camera — so the cost is the connection itself.
-  static const Duration idleBeforeCold = Duration(minutes: 10);
-  static const Duration idleWatchdogTick = Duration(seconds: 30);
+  /// How long a quiet conversation lasts before it ends — the default of the
+  /// wearer's "Stand down after" setting ([standDownChoices], minutes).
+  ///
+  /// An ended conversation is remembered as key points and the next one
+  /// starts fresh. Kept open, every later turn re-sent all of it: 10 minutes
+  /// let a morning's requests pile into one 56k-token context. The price is
+  /// the reconnect: a hold after it spends a second or two connecting, with
+  /// what the wearer says meanwhile buffered.
+  static const Duration idleBeforeCold = Duration(minutes: 2);
+  static const List<int> standDownChoices = [1, 2, 5, 10];
+  static const Duration idleWatchdogTick = Duration(seconds: 15);
 
   /// How long the display is held awake after the agent's last UI action.
   /// Must exceed a slow Gemini round trip, or the screen sleeps mid-task and
@@ -68,6 +72,10 @@ class AppConstants {
 
   static const Duration appReadyPollInterval = Duration(milliseconds: 400);
   static const Duration appReadyTimeout = Duration(seconds: 8);
+
+  /// How long get_screen waits for a window with something in it before
+  /// answering with an empty screen and a note saying so.
+  static const Duration screenDrawTimeout = Duration(seconds: 4);
 
   /// How often a screen watch re-reads the UI while waiting for a condition
   /// (a Skip button appearing, a dialog closing, a download finishing).
@@ -327,14 +335,18 @@ status of the job using the check_job tool if it returns a job_id.
 Make sure to keep checking the status of the job until it is complete and update
 the user about intermediate results.
 
-You can control any app on the device. To operate an app:
-1. Use launch_app to open it by name
-2. Use get_screen to read what is on screen: quoted lines are text, [n] lines
-   are things you can act on
-3. Use tap (with node_id n), type_text, scroll to interact
-4. Call get_screen again after each action to see the updated screen
-5. Repeat until the task is complete
-6. Use press_back to go back and press_home to return home
-Node IDs from get_screen are only valid until the next get_screen call.
+You can use any app on the device:
+1. send_sms sends a text.
+2. Everything else in an app — playing, searching, reading, messaging,
+   booking: do_on_device, with the whole goal in one sentence, in the app the
+   user named (never add another app they did not ask for). A helper works
+   the screen until it is done and tells you how it went. Never tell the user
+   an app task cannot be done without calling it. If it fails, tell the user
+   and ask; do not start another attempt, in any app, unless they ask.
+3. launch_app only opens an app; press_home returns to the watch face.
+
+Do every task on this device yourself. Hand a task to the relay agent
+(execute) only when the user explicitly asks for it — it runs on another
+computer and cannot use the apps here.
 ''';
 }

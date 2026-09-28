@@ -20,6 +20,7 @@ enum SetupPermission {
   camera('Camera', 'So FOX-1 can see what you show it.', AskedBy.prompt),
   phone('Phone', 'Calls: dialling, answering, and knowing when the phone rings.', AskedBy.prompt),
   contacts('Contacts', 'Calling people by name.', AskedBy.prompt),
+  sms('Text messages', 'Sending a text for you without opening Messages.', AskedBy.prompt),
   location('Location', 'Android needs it to find the smart ring and to start the device’s own Wi‑Fi hotspot.', AskedBy.prompt),
   accessibility('Accessibility', 'On-screen tasks: opening apps, tapping and typing for you.', AskedBy.screen),
   notifications('Notification access', 'Reading your notifications.', AskedBy.screen),
@@ -116,6 +117,7 @@ class DeviceSetup {
         SetupPermission.camera => Permission.camera.isGranted,
         SetupPermission.phone => Permission.phone.isGranted,
         SetupPermission.contacts => Permission.contacts.isGranted,
+        SetupPermission.sms => Permission.sms.isGranted,
         SetupPermission.location => Permission.location.isGranted,
         SetupPermission.accessibility => _automation.isServiceEnabled(),
         SetupPermission.notifications => _notifications.isListenerEnabled(),
@@ -138,6 +140,8 @@ class DeviceSetup {
         await Permission.phone.request();
       case SetupPermission.contacts:
         await Permission.contacts.request();
+      case SetupPermission.sms:
+        await Permission.sms.request();
       case SetupPermission.location:
         await Permission.location.request();
       case SetupPermission.accessibility:

@@ -33,6 +33,8 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         ai.fox1.services.AccessibilityKeeper.restoreIfWanted(this)
+        // And stay off the watch's own app killer (see CleanerWhitelist).
+        ai.fox1.services.CleanerWhitelist.ensure(this)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

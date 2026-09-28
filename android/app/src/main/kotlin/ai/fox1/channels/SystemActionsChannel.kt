@@ -51,6 +51,26 @@ object SystemActionsChannel {
         }
     }
 
+    private var talkLock: PowerManager.WakeLock? = null
+
+    /// Keeps the display up while a conversation is live — talking or
+    /// listening — but never turns it on: a ring hold in the dark stays dark.
+    /// Released when she stands down, so the normal timeout applies again.
+    @Suppress("DEPRECATION")
+    private fun holdForConversation(activity: Activity, on: Boolean): Boolean = try {
+        if (on) {
+            val pm = activity.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val lock = talkLock ?: pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "fox1:conversation")
+                .apply { setReferenceCounted(false) }.also { talkLock = it }
+            lock.acquire(MAX_HOLD_MS)
+        } else {
+            talkLock?.let { if (it.isHeld) it.release() }
+        }
+        true
+    } catch (e: Exception) {
+        false
+    }
+
     private fun release(): Boolean {
         return try {
             screenLock?.let { if (it.isHeld) it.release() }
@@ -425,6 +445,7 @@ object SystemActionsChannel {
                     }
 
                     "releaseScreenLock" -> result.success(release())
+                    "holdForConversation" -> result.success(holdForConversation(activity, call.argument<Boolean>("on") == true))
                     "isScreenLockHeld" -> result.success(screenLock?.isHeld == true)
                     "expandStatusBar" -> {
                         try {

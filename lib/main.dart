@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'providers/providers.dart';
 import 'services/logging/log_buffer.dart';
+import 'services/agent/screen_capture.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/launcher_shell.dart';
 import 'screens/bridge_test_screen.dart';
@@ -46,6 +47,7 @@ void main() {
     };
 
     globalContainer = ProviderContainer();
+    ScreenCapture.logging = () => globalContainer.read(developerModeProvider);
     runApp(
       UncontrolledProviderScope(
         container: globalContainer,

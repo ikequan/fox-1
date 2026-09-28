@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../../config/constants.dart';
 import '../agent/agent_bridge.dart';
+import '../agent/native_tools_bridge.dart';
 import '../audio/audio_manager.dart';
 import 'preroll_buffer.dart';
 import '../camera/watch_camera_service.dart';
@@ -118,7 +119,6 @@ class AISession implements AgentEnvironment {
 
   // All tunable durations live in AppConstants so they can be reasoned about
   // together rather than hunted across a dozen files.
-  static const Duration idleBeforeCold = AppConstants.idleBeforeCold;
   static const Duration defaultVisionTimeout = AppConstants.visionAutoStop;
 
   final _sessionState = StreamController<AISessionState>.broadcast();
@@ -152,7 +152,17 @@ class AISession implements AgentEnvironment {
     this.agentBridge,
     this.cameraConfig = const CameraConfig(),
     this.onRequestHome,
-  });
+    Duration Function()? idleLimit,
+    this.onConversationEnded,
+  }) : idleLimit = idleLimit ?? (() => AppConstants.idleBeforeCold);
+
+  /// How long a quiet conversation lasts before it ends — the wearer's
+  /// "Stand down after" setting, read each time so a change applies at once.
+  final Duration Function() idleLimit;
+
+  /// Called once a quiet conversation has ended (gone cold for being idle),
+  /// so it can be remembered and the next one started fresh.
+  final void Function()? onConversationEnded;
 
   /// "Stand down" — the user is done. Mic off, camera off, back to the device
   /// face. The socket and the conversation are kept, so returning to the agent
@@ -160,6 +170,10 @@ class AISession implements AgentEnvironment {
   @override
   Future<void> standDown() async {
     debugPrint('[AI_SESSION] standing down');
+    // A ring double-tap stops helper work too, not only her own stand_down.
+    final bridge = agentBridge;
+    if (bridge is NativeToolsBridge) bridge.cancelHelper();
+    unawaited(SystemActionsService.holdForConversation(false));
     // The release sound, so a wearer with the wrist down knows she has stopped
     // listening — whether they double-tapped or she stood down herself. It is
     // queued behind whatever she is still saying, so it follows her last words.
@@ -203,6 +217,12 @@ class AISession implements AgentEnvironment {
       }
       await startListening();
       _emitState(AISessionState.active);
+      // The countdown runs from the start, not only after leaving the agent
+      // screen: a hold from the watch face changes no screen, and that
+      // conversation never ended by itself.
+      _armIdleWatchdog();
+      // And the screen stays up while she is listening — if it is on.
+      unawaited(SystemActionsService.holdForConversation(true));
     } catch (e) {
       debugPrint('[AI_SESSION] wake failed: $e');
       _emitState(AISessionState.error);
@@ -266,10 +286,11 @@ class AISession implements AgentEnvironment {
   /// across screen changes, so that would never become false.
   bool get _conversationIsLive =>
       _agentCallActive ||
+      _toolsRunning > 0 ||
       _jobPollers.isNotEmpty ||
       _watchers.isNotEmpty ||
       gemini.busy ||
-      DateTime.now().difference(_lastActivity) < idleBeforeCold;
+      DateTime.now().difference(_lastActivity) < idleLimit();
 
   void _markActivity() => _lastActivity = DateTime.now();
 
@@ -282,13 +303,19 @@ class AISession implements AgentEnvironment {
         t.cancel();
         return;
       }
-      if (_agentCallActive || _watchers.isNotEmpty || gemini.busy) {
+      // Talking, listening or working: the screen stays up. Refreshed here
+      // so the native hold's safety timeout never cuts in mid-conversation.
+      if (isListening || _toolsRunning > 0) {
+        unawaited(SystemActionsService.holdForConversation(true));
+      }
+      if (_agentCallActive || _toolsRunning > 0 || _watchers.isNotEmpty || gemini.busy) {
         return;
       }
-      if (DateTime.now().difference(_lastActivity) >= idleBeforeCold) {
-        debugPrint('[AI_SESSION] quiet for ${idleBeforeCold.inMinutes}m -> cold');
+      final limit = idleLimit();
+      if (DateTime.now().difference(_lastActivity) >= limit) {
+        debugPrint('[AI_SESSION] quiet for ${limit.inMinutes}m -> conversation over');
         t.cancel();
-        goCold();
+        goCold().then((_) => onConversationEnded?.call());
       }
     });
   }
@@ -299,6 +326,8 @@ class AISession implements AgentEnvironment {
     _idleTimer?.cancel();
     _idleTimer = null;
     _releaseScreenAwake();
+    // Idle: the ordinary screen timeout applies again.
+    unawaited(SystemActionsService.holdForConversation(false));
 
     await stopListening();
     await stopVision();
@@ -661,10 +690,21 @@ class AISession implements AgentEnvironment {
     // audible. Interrupting there is what chopped words in half.
     if ((_modelSpeaking || audioManager.aiSpeaking) && !urgent) {
       _queuedNotes.add(message);
+      // Its own flush. The job poller used to be the only one, so a screen
+      // watch that fired while she spoke, with no job running, was never
+      // delivered: Spotify's "Search" appeared and she waited for ever.
+      _noteFlusher ??= Timer.periodic(const Duration(milliseconds: 500), (t) {
+        if (_modelSpeaking || audioManager.aiSpeaking) return;
+        t.cancel();
+        _noteFlusher = null;
+        if (!_disposed && _connected) _flushQueuedNotes();
+      });
       return;
     }
     gemini.sendText(message);
   }
+
+  Timer? _noteFlusher;
 
   /// Say something to the agent from outside the conversation.
   ///
@@ -929,9 +969,13 @@ class AISession implements AgentEnvironment {
   /// so the screen must be held awake while they run.
   static const Set<String> _uiAutomationTools = {
     'launch_app', 'get_screen', 'tap', 'swipe',
-    'type_text', 'press_back', 'press_home', 'scroll',
-    'wait_for_screen',
+    'type_text', 'press_back', 'press_enter', 'press_home', 'scroll',
+    'wait_for_screen', 'app_shortcut', 'do_on_device',
   };
+
+  /// Tool calls still working. `do_on_device` can take minutes; that is the
+  /// agent busy, not the conversation quiet.
+  int _toolsRunning = 0;
 
   /// Keep the display up for a grace period after each automation step — the
   /// gap between steps is a Gemini round trip, and a timeout mid-task strands
@@ -971,7 +1015,19 @@ class AISession implements AgentEnvironment {
       timestamp: DateTime.now(),
     ));
 
-    final result = await agentBridge!.handleToolCall(call.name, call.args);
+    final ui = _uiAutomationTools.contains(call.name);
+    // The screen stays up for as long as the tool works — the grace timer
+    // counts from when it finishes, not from when it started.
+    if (ui) _screenLockRelease?.cancel();
+    _toolsRunning++;
+    final Map<String, dynamic> result;
+    try {
+      result = await agentBridge!.handleToolCall(call.name, call.args);
+    } finally {
+      _toolsRunning--;
+      _markActivity();
+    }
+    if (ui) unawaited(_holdScreenAwake());
     gemini.sendToolResponse(call.id, result, name: call.name);
 
     if (call.name == 'make_call' && result['success'] == true) {
@@ -1062,6 +1118,7 @@ class AISession implements AgentEnvironment {
 
   void dispose() {
     _disposed = true;
+    unawaited(SystemActionsService.holdForConversation(false));
     _stopAllWatchers();
     _stopAllJobWatchers();
     _idleTimer?.cancel();

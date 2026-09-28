@@ -8,6 +8,8 @@ import '../platform/phone_service.dart';
 import '../platform/quick_settings_service.dart';
 import '../platform/screen_automation_service.dart';
 import '../session/ai_session.dart' show AgentEnvironment;
+import '../memory/episodes.dart';
+import 'device_helper.dart';
 import '../memory/memory_store.dart';
 import '../call/dialed_numbers.dart';
 import '../notes/note_tools.dart';
@@ -47,6 +49,42 @@ class NativeToolsBridge implements AgentBridge {
   /// and no note.
   final NoteTools? _notes;
 
+  /// Earlier conversations, as remembered key points. Null — and undeclared —
+  /// for the call agent's harnesses and tests.
+  final EpisodeTools? _episodes;
+
+  /// The API key for [DeviceHelper]. With it, on-screen work goes through
+  /// `do_on_device` and the screen tools are not offered to the voice model
+  /// at all; without it (tests, harnesses) the voice model has them.
+  final String Function()? _helperKey;
+
+  /// Told what the helper spent, so it counts in the session's total.
+  final void Function(String source, double usd)? _onCost;
+
+  /// The helper task in progress, so a new instruction can stop it.
+  DeviceHelper? _helper;
+
+  /// What she does that ends a helper task: the wearer has moved on.
+  static const _stopsHelper = {'stand_down', 'press_home', 'close_app', 'close_all_apps', 'do_on_device'};
+
+  /// Stops a running helper task — from the voice model's own instructions
+  /// (see handleToolCall) and from a ring double-tap.
+  void cancelHelper() {
+    if (_helper == null) return;
+    debugPrint('[HELPER] stopped — the wearer moved on');
+    _helper?.cancel();
+  }
+
+  /// Driven by the helper instead of the voice model.
+  static const _helperOnly = {
+    'get_screen', 'tap', 'swipe', 'type_text', 'press_enter', 'press_back',
+    'scroll', 'wait_for_screen',
+    // The helper's first move, not a choice for the voice model: given it,
+    // she tried "play" twice, it did nothing, and she gave up instead of
+    // letting the helper search and tap.
+    'app_shortcut',
+  };
+
   /// Turns the wearer's web portal on or off. Null leaves `web_portal`
   /// answering that it is unavailable.
   final Future<Map<String, dynamic>> Function(bool on)? _portal;
@@ -68,8 +106,14 @@ class NativeToolsBridge implements AgentBridge {
     Future<String?> Function(String number, String task)? dispatchCall,
     RingTools? ring,
     NoteTools? notes,
+    EpisodeTools? episodes,
+    String Function()? helperKey,
+    void Function(String source, double usd)? onCost,
     Future<Map<String, dynamic>> Function(bool on)? portal,
   })  : _inner = innerBridge,
+        _onCost = onCost,
+        _episodes = episodes,
+        _helperKey = helperKey,
         _ring = ring,
         _notes = notes,
         _portal = portal,
@@ -109,6 +153,10 @@ class NativeToolsBridge implements AgentBridge {
     'swipe',
     'type_text',
     'press_back',
+    'send_sms',
+    'do_on_device',
+    'app_shortcut',
+    'press_enter',
     'press_home',
     'scroll',
     'look',
@@ -126,10 +174,13 @@ class NativeToolsBridge implements AgentBridge {
 
   @override
   List<Map<String, dynamic>> get toolDeclarations {
+    final helper = _helperKey != null;
     final declarations = <Map<String, dynamic>>[
-      ..._nativeDeclarations,
+      for (final d in _nativeDeclarations)
+        if (helper ? !_helperOnly.contains(d['name']) : d['name'] != 'do_on_device') d,
       if (_ring != null) ...RingTools.declarations,
       if (_notes != null) ...NoteTools.declarations,
+      if (_episodes != null) ...EpisodeTools.declarations,
     ];
     if (_inner != null) {
       declarations.addAll(_inner.toolDeclarations);
@@ -146,6 +197,9 @@ class NativeToolsBridge implements AgentBridge {
         ? 'native'
         : (_inner != null ? 'inner' : 'unknown');
     debugPrint('[TOOLS] $where $name $args');
+    // Only her calls come through here; the helper's own Home and Back go
+    // straight to _handleNative and must not stop it.
+    if (_stopsHelper.contains(name)) cancelHelper();
     final result = await _dispatch(name, args);
     debugPrint('[TOOLS] $name -> ${_summarise(result)}');
     return result;
@@ -161,6 +215,10 @@ class NativeToolsBridge implements AgentBridge {
     if (notes != null && NoteTools.names.contains(name)) {
       return notes.handle(name, args);
     }
+    final episodes = _episodes;
+    if (episodes != null && EpisodeTools.names.contains(name)) {
+      return episodes.handle(name, args);
+    }
     if (_nativeToolNames.contains(name)) {
       return _handleNative(name, args);
     }
@@ -172,7 +230,8 @@ class NativeToolsBridge implements AgentBridge {
 
   bool _isRingTool(String name) =>
       (_ring != null && RingTools.names.contains(name)) ||
-      (_notes != null && NoteTools.names.contains(name));
+      (_notes != null && NoteTools.names.contains(name)) ||
+      (_episodes != null && EpisodeTools.names.contains(name));
 
   /// A tool result can be a whole screen. Log the verdict, not the payload.
   String _summarise(Map<String, dynamic> r) {
@@ -332,6 +391,37 @@ class NativeToolsBridge implements AgentBridge {
         case 'launch_app':
           return _handleLaunchApp(args);
 
+        case 'send_sms':
+          return _handleSendSms(args);
+
+        case 'do_on_device':
+          final key = _helperKey;
+          if (key == null) return {'success': false, 'error': 'The helper is not available'};
+          final task = '${args['task'] ?? ''}'.trim();
+          if (task.isEmpty) return {'success': false, 'error': 'Say the task in one sentence.'};
+          final helper = _helper = DeviceHelper(
+            apiKey: key,
+            act: _handleNative,
+            audioPlaying: _appsService.isMusicActive,
+            readScreen: () async {
+              final r = await _handleNative('get_screen', const {});
+              final screen = r['screen'];
+              if (screen is! String) return 'Could not read the screen: ${r['error'] ?? 'unknown'}';
+              return r['note'] == null ? screen : '$screen\n(${r['note']})';
+            },
+          );
+          final HelperResult result;
+          try {
+            result = await helper.run(task, confirmed: args['confirmed'] == true);
+          } finally {
+            if (identical(_helper, helper)) _helper = null;
+          }
+          _onCost?.call('helper', result.usd);
+          return result.toToolResult();
+
+        case 'app_shortcut':
+          return _handleShortcut(args);
+
         case 'close_app':
           return _handleCloseApp(args);
 
@@ -343,20 +433,52 @@ class NativeToolsBridge implements AgentBridge {
           };
 
         case 'get_screen':
+          // Developer mode logs the raw tree beside what the model gets. The
+          // raw read renumbers the ids, so it goes first: the compact read
+          // after it sets the ids the model will use.
+          await _waitUntilDrawn();
+          final raw = ScreenCapture.logging() ? await _screenService.getScreenTree() : null;
           final screen = await _screenService.getScreen();
-          if (screen['screen'] is String) ScreenCapture.record(screen['screen'] as String);
+          final drawn = screen['screen'];
+          if (drawn is String && !ScreenAutomationService.hasContent(drawn)) {
+            screen['note'] = 'Nothing readable on screen after '
+                '${AppConstants.screenDrawTimeout.inSeconds}s. The app may '
+                'still be loading: call wait_seconds for 3 and read again. If it '
+                'is still empty, this app draws without accessibility text '
+                '(video, game, map) and cannot be driven — say so.';
+          }
+          if (screen['screen'] is String) {
+            ScreenCapture.record(screen['screen'] as String,
+                raw: raw?['screen'] is Map ? raw!['screen'] as Map : null);
+          }
           return screen;
 
         case 'tap':
-          return _verifyEffect(
+          final nodeId = (args['node_id'] as num?)?.toInt();
+          final tapped = await _verifyEffect(
             () => _screenService.tap(
-              nodeId: (args['node_id'] as num?)?.toInt(),
+              nodeId: nodeId,
               text: args['text'] as String?,
               x: (args['x'] as num?)?.toDouble(),
               y: (args['y'] as num?)?.toDouble(),
             ),
             actionName: 'tap',
           );
+          // Some apps ignore the accessibility click — AOSP Messaging's
+          // conversation rows did nothing when clicked — so when a node tap
+          // changes nothing, touch it for real. The raw tree used to give the
+          // model bounds to do this itself; the compact screen has none.
+          if (nodeId == null ||
+              (tapped['screen_changed'] != false && tapped['success'] != false)) {
+            return tapped;
+          }
+          final at = await _screenService.nodeCenter(nodeId);
+          if (at == null) return tapped;
+          final touched = await _verifyEffect(
+            () => _screenService.tap(x: at.x, y: at.y),
+            actionName: 'tap',
+          );
+          return {...touched, 'result': 'Tapped node $nodeId (by touch)'};
 
         case 'swipe':
           return _verifyEffect(
@@ -372,12 +494,18 @@ class NativeToolsBridge implements AgentBridge {
 
         case 'type_text':
           return _verifyEffect(
-            () => _screenService.typeText(args['text'] as String? ?? ''),
+            () => _screenService.typeText(
+              args['text'] as String? ?? '',
+              nodeId: (args['node_id'] as num?)?.toInt(),
+            ),
             actionName: 'type_text',
           );
 
         case 'press_back':
           return _verifyEffect(_screenService.pressBack, actionName: 'press_back');
+
+        case 'press_enter':
+          return _verifyEffect(_screenService.pressEnter, actionName: 'press_enter');
 
         case 'press_home':
           // Also send the launcher itself back to the watch face, otherwise it
@@ -529,10 +657,91 @@ class NativeToolsBridge implements AgentBridge {
     final appName = args['app_name'] as String?;
     if (appName == null || appName.isEmpty) return null;
 
-    final apps = await _appsService.getInstalledApps();
+    final apps = await _appsService.getAppNames();
     final lower = appName.toLowerCase();
+    // The exact name first: "YouTube" is not "YouTube Music".
+    final exact = apps.where((a) => a.name.toLowerCase() == lower);
+    if (exact.isNotEmpty) return exact.first.packageName;
     final match = apps.where((a) => a.name.toLowerCase().contains(lower));
     return match.isEmpty ? null : match.first.packageName;
+  }
+
+  /// A text sent with no screen: one step instead of fifteen to thirty.
+  /// A name is looked up; two people who match are a question, not a guess.
+  Future<Map<String, dynamic>> _handleSendSms(Map<String, dynamic> args) async {
+    final to = '${args['to'] ?? ''}'.trim();
+    final text = '${args['text'] ?? ''}'.trim();
+    if (to.isEmpty || text.isEmpty) {
+      return {'success': false, 'error': 'Give "to" (a number or a contact name) and "text".'};
+    }
+    var number = to;
+    var who = to;
+    if (RegExp(r'[A-Za-z]').hasMatch(to)) {
+      final r = await _phoneService.getContacts(query: to);
+      if (r['success'] != true) return r;
+      final found = <String, String>{};
+      for (final c in (r['contacts'] as List).cast<Map>()) {
+        final n = '${c['phone_number'] ?? ''}'.replaceAll(RegExp(r'[^\d+]'), '');
+        if (n.isNotEmpty) found.putIfAbsent(n, () => '${c['name'] ?? to}');
+      }
+      if (found.isEmpty) {
+        return {'success': false, 'error': 'No contact called "$to" with a number. Ask for the number.'};
+      }
+      if (found.length > 1) {
+        return {
+          'success': false,
+          'error': 'More than one match — ask the wearer which: '
+              '${found.entries.map((e) => '${e.value} ${e.key}').join(', ')}',
+        };
+      }
+      number = found.keys.single;
+      who = '${found.values.single} ($number)';
+    }
+    final r = await _phoneService.sendSms(number, text);
+    return r['success'] == true
+        ? {'success': true, 'result': 'Text sent to $who: "$text"'}
+        : r;
+  }
+
+  Future<Map<String, dynamic>> _handleShortcut(Map<String, dynamic> args) async {
+    final kind = '${args['action'] ?? ''}';
+    final query = '${args['query'] ?? ''}'.trim();
+    String? package;
+    switch (kind) {
+      case 'navigate':
+        package = 'com.google.android.apps.maps';
+      case 'whatsapp':
+        package = 'com.whatsapp';
+      default:
+        package = await _resolvePackage({'app_name': args['app']});
+        if (package == null) {
+          return {'success': false, 'error': 'Say which installed app: "app" was "${args['app'] ?? ''}".'};
+        }
+    }
+    var number = '${args['number'] ?? ''}'.trim();
+    if (kind == 'whatsapp' && RegExp(r'[A-Za-z]').hasMatch(number)) {
+      final r = await _phoneService.getContacts(query: number);
+      final list = r['success'] == true ? (r['contacts'] as List).cast<Map>() : const <Map>[];
+      final nums = {for (final c in list) '${c['phone_number'] ?? ''}'}..remove('');
+      if (nums.length != 1) {
+        return {'success': false, 'error': nums.isEmpty ? 'No contact "$number" with a number.' : 'Several numbers for "$number": ${nums.join(', ')} — ask which.'};
+      }
+      number = nums.single;
+    }
+    final r = await _appsService.openShortcut(kind,
+        package: package, query: query, number: number, text: '${args['text'] ?? ''}');
+    if (r['success'] != true) return r;
+    await _waitForApp(package);
+    return {
+      'success': true,
+      'result': switch (kind) {
+        'play' => r['playing'] == true
+            ? 'Playing — $package started "$query".'
+            : 'Nothing started playing in 8 s: $package ignored the request. Do it on screen instead: search for "$query" in the app and tap the best result.',
+        'whatsapp' => 'WhatsApp chat open with the message typed in — NOT sent yet. get_screen, then tap Send.',
+        _ => 'Opened $package at "$query". get_screen to continue.',
+      },
+    };
   }
 
   Future<Map<String, dynamic>> _handleCloseApp(Map<String, dynamic> args) async {
@@ -580,19 +789,45 @@ class NativeToolsBridge implements AgentBridge {
     };
   }
 
-  /// Poll until the launched app is genuinely foreground. A fixed 2s delay let
-  /// the agent read a splash screen and tap into nothing, stranding the task.
+  /// Poll until the launched app is in front, has drawn something, and has
+  /// stopped changing between two reads. In front alone is not ready: Spotify
+  /// was "now on screen" with an empty window, and WhatsApp had no window at
+  /// all a second later.
   Future<bool> _waitForApp(String packageName) async {
     final deadline = DateTime.now().add(AppConstants.appReadyTimeout);
+    String? last;
     while (DateTime.now().isBefore(deadline)) {
       await Future.delayed(AppConstants.appReadyPollInterval);
       // keep: false — a background check must not renumber the model's ids.
       final screen = await _screenService.getScreen(keep: false);
       final data = screen['screen'];
       if (screen['success'] != true || data is! String) continue;
-      if (ScreenAutomationService.packageOf(data) == packageName) return true;
+      if (ScreenAutomationService.packageOf(data) != packageName ||
+          !ScreenAutomationService.hasContent(data)) {
+        last = null;
+        continue;
+      }
+      if (data == last) return true;
+      last = data;
     }
     return false;
+  }
+
+  /// Before `get_screen` answers: wait, up to [AppConstants.screenDrawTimeout],
+  /// for a window with something in it. Covers apps opened by a tap, not by
+  /// launch_app, and a window that is mid-change.
+  Future<void> _waitUntilDrawn() async {
+    final deadline = DateTime.now().add(AppConstants.screenDrawTimeout);
+    while (true) {
+      final screen = await _screenService.getScreen(keep: false);
+      final data = screen['screen'];
+      if (screen['success'] == true && data is String &&
+          ScreenAutomationService.hasContent(data)) {
+        return;
+      }
+      if (!DateTime.now().isBefore(deadline)) return;
+      await Future.delayed(AppConstants.appReadyPollInterval);
+    }
   }
 
   Future<Map<String, dynamic>> _handleLaunchApp(Map<String, dynamic> args) async {
@@ -860,7 +1095,7 @@ class NativeToolsBridge implements AgentBridge {
     },
     {
       'name': 'get_screen',
-      'description': 'Read the device SCREEN, for controlling apps — NOT the physical world (use look for that). Returns text, one line per item. The first line is package/Activity, plus the window title when it says more. Then, top to bottom: a quoted line is text you can read; a line starting [n] is something you can act on, where n is its node_id for tap or scroll. Kinds: tap, input (its current value, or its placeholder marked (hint); focused = typing goes there), scroll, check[x] / check[ ], and sel for the selected tab or item. A tap line holds all the text of its row, so a chat or message row reads "name · preview · time". An element with no text shows where it is, e.g. (icon, top-right). Nothing off screen is listed; scroll to see more. node_ids change on every get_screen call. Read it again after each action — but not in a loop while waiting (use wait_for_screen).',
+      'description': 'Read the device SCREEN, for controlling apps — NOT the physical world (use look for that). Returns text, one line per item. The first line is package/Activity, the window title when it says more, and the screen size in pixels. Then, top to bottom: a quoted line is text you can read; a line starting [n] is something you can act on, where n is its node_id for tap or scroll. Kinds: tap, input (its current value, or its placeholder marked (hint); focused = typing goes there), scroll, check[x] / check[ ], and sel for the selected tab or item. A tap line holds all the text of its row, so a chat or message row reads "name · preview · time". An element with no text shows where it is, e.g. (icon, top-right). A drop-down, menu or dialog drawn over the app comes first, between — on top — and — under it —; it is usually what to act on. (keyboard open …) means the keyboard hides what it covers, and those items are left out: press_enter submits what you typed, press_back closes it. Nothing off screen is listed; scroll to see more. node_ids change on every get_screen call. Read it again after each action — but not in a loop while waiting (use wait_for_screen).',
       'parameters': {'type': 'object', 'properties': {}},
     },
     // --- Camera (physical world) ---
@@ -923,20 +1158,20 @@ class NativeToolsBridge implements AgentBridge {
     },
     {
       'name': 'tap',
-      'description': 'Tap a UI element. Prefer node_id from get_screen, else text, else x/y coordinates. The result includes screen_changed: if it is false the tap had NO effect — the element was inert or the wrong target. Never treat a step with screen_changed false as done; read the screen again and try a different element.',
+      'description': 'Tap a UI element. Prefer node_id from get_screen, else text. x/y are a last resort, in pixels — the screen size is at the end of get_screen\'s first line. The result includes screen_changed: if it is false the tap had NO effect — the element was inert or the wrong target. Never treat a step with screen_changed false as done; read the screen again and try a different element.',
       'parameters': {
         'type': 'object',
         'properties': {
           'node_id': {'type': 'integer', 'description': 'The n of an [n] line from the latest get_screen.'},
           'text': {'type': 'string', 'description': 'Text or content description to find and tap.'},
-          'x': {'type': 'number', 'description': 'X coordinate to tap.'},
-          'y': {'type': 'number', 'description': 'Y coordinate to tap.'},
+          'x': {'type': 'number', 'description': 'X in pixels from the left.'},
+          'y': {'type': 'number', 'description': 'Y in pixels from the top.'},
         },
       },
     },
     {
       'name': 'swipe',
-      'description': 'Swipe on the screen from one point to another.',
+      'description': 'Swipe on the screen from one point to another, in pixels — the screen size is at the end of get_screen\'s first line.',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -951,18 +1186,63 @@ class NativeToolsBridge implements AgentBridge {
     },
     {
       'name': 'type_text',
-      'description': 'Type text into the currently focused input field.',
+      'description': 'Put text into an input field, replacing what is in it. Pass node_id to choose the field (an [n] input line from get_screen); without it the text goes into the focused input. A recipient or search field usually needs its suggestion tapped afterwards before it counts.',
       'parameters': {
         'type': 'object',
         'properties': {
           'text': {'type': 'string', 'description': 'Text to type.'},
+          'node_id': {'type': 'integer', 'description': 'The n of an [n] input line from the latest get_screen.'},
         },
         'required': ['text'],
       },
     },
     {
+      'name': 'do_on_device',
+      'description': 'Do ANY task in the apps on this device — play, search, read, message, book, change a setting: a helper works the screen, tapping and typing until it is done, and reports back. Never give up on an app task without calling this. Give the whole goal in one sentence with every detail — app, person, exact text, what to find. Name only the app the wearer named; never add another app to try unless they said so. It can take a minute or two; say you are on it first. It stops before sending, paying or deleting and returns what the final step will do: set confirmed true only when the wearer has already said exactly what and to whom, or has just said yes to that.',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'task': {'type': 'string'},
+          'confirmed': {'type': 'boolean'},
+        },
+        'required': ['task'],
+      },
+    },
+    {
+      'name': 'send_sms',
+      'description': 'Send a text message (SMS) directly — no screen, one step. Use this, not the Messages app. "to" is a phone number or a contact name; if the name matches several people you are told who, so ask.',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'to': {'type': 'string'},
+          'text': {'type': 'string'},
+        },
+        'required': ['to', 'text'],
+      },
+    },
+    {
+      'name': 'app_shortcut',
+      'description': 'Open an app straight at the right place in one step — try this BEFORE driving the screen. play: play what matches query in app (Spotify, YouTube Music, YouTube). search: the app\'s own search results for query (YouTube, Spotify, Play Store, Maps). navigate: Google Maps directions to query. whatsapp: a WhatsApp chat with number (or contact name) and text typed in, not sent — then tap Send on screen.',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'action': {'type': 'string', 'enum': ['play', 'search', 'navigate', 'whatsapp']},
+          'app': {'type': 'string', 'description': 'App name, for play and search.'},
+          'query': {'type': 'string'},
+          'number': {'type': 'string', 'description': 'whatsapp: phone number or contact name.'},
+          'text': {'type': 'string', 'description': 'whatsapp: the message.'},
+        },
+        'required': ['action'],
+      },
+    },
+    {
       'name': 'press_back',
       'description': 'Press the back button.',
+      'parameters': {'type': 'object', 'properties': {}},
+    },
+    {
+      'name': 'press_enter',
+      'description': 'Press the keyboard\'s Enter / Done / Search / Send key, with the keyboard open. type_text only sets the text: a search box searches, and a recipient field turns what you typed into a recipient, only on this key.',
       'parameters': {'type': 'object', 'properties': {}},
     },
     {

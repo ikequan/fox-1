@@ -29,7 +29,17 @@ object ScreenAutomationChannel {
 
     fun register(flutterEngine: FlutterEngine, activity: Activity) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-            .setMethodCallHandler { call, result ->
+            .setMethodCallHandler { call, raw ->
+                // Status and Settings answer at once; everything that reads or
+                // touches another app's screen runs on the screen thread.
+                if (call.method in instant) handle(call, raw, activity)
+                else Background.run(Background.screen, raw) { handle(call, it, activity) }
+            }
+    }
+
+    private val instant = setOf("isServiceEnabled", "getServiceStatus", "keepStatus", "openAccessibilitySettings")
+
+    private fun handle(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result, activity: Activity) {
                 when (call.method) {
                     "isServiceEnabled" -> {
                         result.success(Fox1AccessibilityService.isEnabledInSettings(activity))
@@ -80,6 +90,10 @@ object ScreenAutomationChannel {
                                 "error" to whyFailed(activity, "No active window to read")))
                         }
                     }
+                    "nodeCenter" -> {
+                        val c = Fox1AccessibilityService.nodeCenter(call.argument<Int>("node_id") ?: -1)
+                        result.success(c?.let { listOf(it[0], it[1]) })
+                    }
                     "tap" -> {
                         val nodeId = call.argument<Int>("node_id")
                         val text = call.argument<String>("text")
@@ -122,12 +136,15 @@ object ScreenAutomationChannel {
                     }
                     "typeText" -> {
                         val text = call.argument<String>("text") ?: ""
-                        val ok = Fox1AccessibilityService.typeText(text)
+                        val nodeId = call.argument<Int>("node_id")
+                        val ok = Fox1AccessibilityService.typeText(text, nodeId)
                         result.success(if (ok)
                             mapOf<String, Any>("success" to true, "result" to "Typed text")
                         else
                             mapOf<String, Any>("success" to false,
-                                "error" to whyFailed(activity, "No editable field found")))
+                                "error" to whyFailed(activity,
+                                    if (nodeId != null) "Node $nodeId is not an input on the current screen"
+                                    else "No editable field found")))
                     }
                     "pressBack" -> {
                         val ok = Fox1AccessibilityService.pressBack()
@@ -136,6 +153,13 @@ object ScreenAutomationChannel {
                         else
                             mapOf<String, Any>("success" to false,
                                 "error" to whyFailed(activity, "Back press had no effect")))
+                    }
+                    "pressEnter" -> Fox1AccessibilityService.pressEnter { ok ->
+                        result.success(if (ok)
+                            mapOf<String, Any>("success" to true, "result" to "Enter pressed")
+                        else
+                            mapOf<String, Any>("success" to false,
+                                "error" to whyFailed(activity, "No keyboard open to press Enter on — tap the input first")))
                     }
                     "pressHome" -> {
                         val ok = Fox1AccessibilityService.pressHome()
@@ -159,6 +183,5 @@ object ScreenAutomationChannel {
                     }
                     else -> result.notImplemented()
                 }
-            }
     }
 }

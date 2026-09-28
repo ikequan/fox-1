@@ -41,6 +41,11 @@ class LogBuffer {
   static const int _keepFiles = 6;
 
   File? _file;
+
+  /// Writes in the background. A synchronous append twice a second ran on
+  /// the UI isolate, and on this eMMC one slow write stalls the launcher.
+  IOSink? _sink;
+  int _written = 0;
   final List<String> _pending = <String>[];
   Timer? _flushTimer;
 
@@ -63,6 +68,8 @@ class LogBuffer {
           .split('.')
           .first;
       _file = File('$dir/session-$stamp.log');
+      _sink = _file!.openWrite(mode: FileMode.append);
+      _written = 0;
       _pending.insert(0, '=== session start ${DateTime.now()} ===');
       _flushTimer =
           Timer.periodic(const Duration(milliseconds: 500), (_) => _flush());
@@ -100,9 +107,14 @@ class LogBuffer {
       // It also buys nothing we need: the page cache belongs to the kernel once
       // write() returns, so the log survives the process being killed either
       // way. fsync only guards against power loss.
-      f.writeAsStringSync('$chunk\n', mode: FileMode.append);
-      if (f.lengthSync() > _maxFileBytes) {
+      final sink = _sink;
+      if (sink == null) return;
+      sink.write('$chunk\n');
+      _written += chunk.length + 1;
+      if (_written > _maxFileBytes) {
         _file = null;
+        _sink = null;
+        unawaited(sink.close());
         attachFile();
       }
     } catch (_) {

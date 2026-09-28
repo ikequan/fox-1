@@ -82,6 +82,24 @@ class PhoneService {
     }
   }
 
+  /// Sends a text directly; answers once the network has taken it.
+  Future<Map<String, dynamic>> sendSms(String to, String text) async {
+    if (!await _ensurePermission(Permission.sms)) {
+      return {
+        'success': false,
+        'error': 'Permission to send texts is off. Tell the wearer to allow '
+            '"Text messages" in Settings → Permissions, or send it through the '
+            'Messages app on screen.',
+      };
+    }
+    try {
+      final r = await _channel.invokeMethod('sendSms', {'to': to, 'text': text});
+      return Map<String, dynamic>.from(r as Map);
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<bool> _ensurePermission(Permission permission) async {
     var status = await permission.status;
     if (status.isGranted) return true;

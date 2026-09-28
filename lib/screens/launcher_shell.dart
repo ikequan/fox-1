@@ -30,6 +30,11 @@ class _LauncherShellState extends ConsumerState<LauncherShell>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _enforceImmersive();
+    // The app list, loaded while nobody is looking, so the first swipe to it
+    // finds it ready instead of waiting on every icon.
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) ref.read(installedAppsProvider);
+    });
   }
 
   @override

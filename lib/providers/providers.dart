@@ -11,6 +11,7 @@ import '../services/platform/installed_apps_service.dart';
 import '../services/platform/notification_service.dart';
 import '../services/platform/quick_settings_service.dart';
 import '../services/call/call_history.dart';
+import '../services/memory/episodes.dart';
 import '../services/memory/memory_store.dart';
 import '../services/call/dialed_numbers.dart';
 import '../services/call/auto_answer.dart';
@@ -89,6 +90,11 @@ final callHistoryProvider = Provider<CallHistory>((_) => CallHistory());
 final autoAnswerModeProvider =
     StateProvider<AutoAnswerMode>((_) => AutoAnswerMode.off);
 final autoAnswerDelayProvider = StateProvider<int>((_) => 6);
+
+/// Minutes of quiet before a conversation ends and she stands down (one of
+/// [AppConstants.standDownChoices]).
+final standDownAfterProvider =
+    StateProvider<int>((_) => AppConstants.idleBeforeCold.inMinutes);
 final autoAnswerBlockedProvider = StateProvider<String>((_) => '');
 final autoAnswerAlwaysProvider = StateProvider<String>((_) => '');
 
@@ -194,6 +200,9 @@ final conversationStoreProvider = Provider<ConversationStore>((ref) {
   ref.onDispose(s.dispose);
   return s;
 });
+
+/// Conversations remembered as key points (see [Episode]).
+final episodeStoreProvider = Provider<EpisodeStore>((_) => EpisodeStore());
 
 /// Quadruple-tap recordings → transcribed notes, with nobody asking. Started
 /// at boot beside the ring service.
@@ -415,6 +424,8 @@ final settingsInitProvider = FutureProvider<void>((ref) async {
           orElse: () => AutoAnswerMode.off);
   ref.read(autoAnswerDelayProvider.notifier).state =
       prefs.getInt('auto_answer_delay') ?? 6;
+  ref.read(standDownAfterProvider.notifier).state =
+      prefs.getInt('stand_down_after') ?? AppConstants.idleBeforeCold.inMinutes;
   ref.read(autoAnswerBlockedProvider.notifier).state =
       prefs.getString('auto_answer_blocked') ?? '';
   ref.read(autoAnswerAlwaysProvider.notifier).state =
