@@ -54,7 +54,29 @@ class ScreenAutomationService {
     }
   }
 
-  Future<Map<String, dynamic>> getScreen() async {
+  /// The screen as the model reads it: `{success, screen}` where `screen` is
+  /// the compact text form (see `Fox1AccessibilityService.getCompactScreen`).
+  ///
+  /// [keep] makes its `[n]` ids the ones `tap` and `scroll` take, retiring the
+  /// previous ones. Anything reading the screen in the background — waiting
+  /// for an app, a screen watch — passes `keep: false` so the ids the model is
+  /// holding stay valid.
+  Future<Map<String, dynamic>> getScreen({bool keep = true}) async {
+    try {
+      final result = await _channel.invokeMethod('getCompactScreen', {'keep': keep});
+      return Map<String, dynamic>.from(result as Map);
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// The app a compact screen belongs to — its header's package.
+  static String packageOf(String screen) =>
+      screen.split('\n').first.split(RegExp(r'[/ ]')).first;
+
+  /// The raw nested accessibility tree — what the model used to get. Only the
+  /// Hub's developer comparison reads it now. Renumbers the ids like [getScreen].
+  Future<Map<String, dynamic>> getScreenTree() async {
     try {
       final result = await _channel.invokeMethod('getScreen');
       return Map<String, dynamic>.from(result as Map);

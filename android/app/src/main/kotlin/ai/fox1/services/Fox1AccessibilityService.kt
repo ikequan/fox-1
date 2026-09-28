@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -52,6 +53,8 @@ class Fox1AccessibilityService : AccessibilityService() {
         /// Whether the system has actually bound the service in this process.
         fun isBound(): Boolean = instance != null
 
+        /// The raw nested tree. The model no longer gets this (it reads
+        /// [getCompactScreen]); kept for the Hub's developer comparison.
         fun getScreenTree(): Map<String, Any?>? {
             val service = instance ?: return null
             val root = service.rootInActiveWindow ?: return null
@@ -83,6 +86,175 @@ class Fox1AccessibilityService : AccessibilityService() {
                 "node_count" to nodes.size,
                 "nodes" to nodes
             )
+        }
+
+        /**
+         * The screen as the model reads it (`get_screen`) — flat lines, ids
+         * only on what can be acted on, text merged into the row it belongs
+         * to, nothing invisible. About a seventh of the size of the raw tree
+         * ([getScreenTree]), and it stays in the conversation, billed again on
+         * every later turn.
+         *
+         *     com.whatsapp/HomeActivity
+         *     "Chats"
+         *     [1] tap "Kofi · Hey, see you at 5 · 10:42"
+         *     [2] tap (icon, top-right)
+         *     [3] input "Search…" (hint) focused
+         *
+         * With [keep] the `[n]` nodes become the new [nodeMap] — the ids
+         * `tap` and `scroll` take — and the previous ones are retired. Without
+         * it nothing is kept, so a background check (waiting for an app or a
+         * screen watch) never renumbers the ids the model is holding.
+         */
+        fun getCompactScreen(keep: Boolean = true): String? {
+            val service = instance ?: return null
+            val root = service.rootInActiveWindow ?: return null
+            if (keep) recycleNodeMap()
+            val screen = Rect().also { root.getBoundsInScreen(it) }
+            val pkg = root.packageName?.toString() ?: ""
+            val title = try {
+                val windows = service.windows
+                val t = windows.firstOrNull { it.isActive }?.title?.toString() ?: ""
+                windows.forEach { w -> try { @Suppress("DEPRECATION") w.recycle() } catch (_: Exception) {} }
+                t
+            } catch (_: Exception) { "" }
+            val appLabel = try {
+                service.packageManager.getApplicationLabel(service.packageManager.getApplicationInfo(pkg, 0)).toString()
+            } catch (_: Exception) { "" }
+            val out = StringBuilder(pkg)
+            if (lastActivityPkg == pkg && lastActivity.isNotEmpty()) out.append('/').append(lastActivity)
+            // The window title adds something only when it is not just the app's
+            // name: a dialog ("Google storage backup"), a conversation ("MTN").
+            if (title.isNotEmpty() && title != appLabel) out.append(" · \"").append(clip(title, LABEL_MAX)).append('"')
+            out.append('\n')
+            val next = AtomicInteger(1)
+            if (!compactNode(root, screen, next, out, 0, keep)) recycleNode(root)
+            if (out.length >= COMPACT_MAX_CHARS || next.get() > COMPACT_MAX_IDS) {
+                out.append("… more on screen — scroll to see it\n")
+            }
+            return out.toString().trimEnd()
+        }
+
+        @Volatile private var lastActivity = ""
+        @Volatile private var lastActivityPkg = ""
+        private val activityClasses = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+        private const val LABEL_MAX = 80
+        private const val TEXT_MAX = 300
+        // A runaway list (a settings page, a long feed) stops here.
+        private const val COMPACT_MAX_CHARS = 8000
+        private const val COMPACT_MAX_IDS = 150
+
+        private fun full(out: StringBuilder, next: AtomicInteger) =
+            out.length >= COMPACT_MAX_CHARS || next.get() > COMPACT_MAX_IDS
+
+        private fun ownText(n: AccessibilityNodeInfo): String {
+            val t = n.text?.toString()?.trim().orEmpty()
+            if (t.isNotEmpty()) return t
+            val d = n.contentDescription?.toString()?.trim().orEmpty()
+            if (d.isNotEmpty()) return d
+            return if (Build.VERSION.SDK_INT >= 26) n.hintText?.toString()?.trim().orEmpty() else ""
+        }
+
+        private fun interactive(n: AccessibilityNodeInfo) =
+            n.isClickable || n.isLongClickable || n.isEditable || n.isScrollable || n.isCheckable
+
+        private fun visible(n: AccessibilityNodeInfo, screen: Rect): Boolean {
+            if (!n.isVisibleToUser) return false
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            return !r.isEmpty && Rect.intersects(r, screen)
+        }
+
+        /** The text of a row's non-interactive descendants, for merging into it. */
+        private fun mergedText(n: AccessibilityNodeInfo, screen: Rect, acc: LinkedHashSet<String>, depth: Int) {
+            if (depth > MAX_DEPTH) return
+            for (i in 0 until n.childCount) {
+                val c = n.getChild(i) ?: continue
+                if (visible(c, screen) && !interactive(c)) {
+                    val t = ownText(c)
+                    if (t.isNotEmpty()) acc.add(t)
+                    mergedText(c, screen, acc, depth + 1)
+                }
+                recycleNode(c)
+            }
+        }
+
+        private fun region(n: AccessibilityNodeInfo, screen: Rect): String {
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            val v = when { r.centerY() < screen.height() / 3 -> "top"; r.centerY() > screen.height() * 2 / 3 -> "bottom"; else -> "middle" }
+            val h = when { r.centerX() < screen.width() / 3 -> "left"; r.centerX() > screen.width() * 2 / 3 -> "right"; else -> "centre" }
+            return "$v-$h"
+        }
+
+        private fun clip(s: String, max: Int) =
+            s.replace('\n', ' ').let { if (it.length > max) it.take(max) + "…" else it }
+
+        /// Writes [n] and what is under it. A `true` return means [n] was stored
+        /// in [nodeMap] and the caller must not recycle it.
+        private fun compactNode(n: AccessibilityNodeInfo, screen: Rect, next: AtomicInteger, out: StringBuilder, depth: Int, keep: Boolean): Boolean {
+            if (depth > MAX_DEPTH || full(out, next)) return false
+            if (!visible(n, screen)) return false
+            val own = ownText(n)
+            var kept = false
+            if (interactive(n)) {
+                val id = next.getAndIncrement()
+                if (keep) { nodeMap[id] = n; kept = true }
+                val role = when {
+                    n.isEditable -> "input"
+                    n.isCheckable -> if (n.isChecked) "check[x]" else "check[ ]"
+                    n.isScrollable -> "scroll"
+                    else -> "tap"
+                }
+                val line = StringBuilder("[$id] $role")
+                if (n.isEditable) {
+                    val value = n.text?.toString()?.trim().orEmpty()
+                    val hint = if (Build.VERSION.SDK_INT >= 26) n.hintText?.toString()?.trim().orEmpty() else ""
+                    when {
+                        value.isNotEmpty() && value != hint -> line.append(" \"").append(clip(value, TEXT_MAX)).append('"')
+                        hint.isNotEmpty() -> line.append(" \"").append(clip(hint, LABEL_MAX)).append("\" (hint)")
+                        else -> line.append(" (").append(region(n, screen)).append(')')
+                    }
+                    if (n.isFocused) line.append(" focused")
+                } else if (n.isScrollable) {
+                    if (own.isNotEmpty()) line.append(" \"").append(clip(own, LABEL_MAX)).append('"')
+                    else line.append(" (").append(region(n, screen)).append(')')
+                } else {
+                    val parts = LinkedHashSet<String>()
+                    if (own.isNotEmpty()) parts.add(own)
+                    mergedText(n, screen, parts, depth + 1)
+                    if (parts.isEmpty()) line.append(" (icon, ").append(region(n, screen)).append(')')
+                    // Tap targets are often content — a message bubble, a chat
+                    // preview — so they keep TEXT_MAX. Buttons are short anyway.
+                    else line.append(" \"").append(clip(parts.joinToString(" · "), TEXT_MAX)).append('"')
+                }
+                if (n.isSelected) line.append(" sel")
+                out.append(line).append('\n')
+                if (!n.isScrollable) {
+                    // Text is merged above; still walk for tappable elements inside the row.
+                    emitInteractiveOnly(n, screen, next, out, depth + 1, keep)
+                    return kept
+                }
+            } else if (own.isNotEmpty()) {
+                out.append('"').append(clip(own, TEXT_MAX)).append("\"\n")
+            }
+            for (i in 0 until n.childCount) {
+                val c = n.getChild(i) ?: continue
+                if (!compactNode(c, screen, next, out, depth + 1, keep)) recycleNode(c)
+            }
+            return kept
+        }
+
+        private fun emitInteractiveOnly(n: AccessibilityNodeInfo, screen: Rect, next: AtomicInteger, out: StringBuilder, depth: Int, keep: Boolean) {
+            if (depth > MAX_DEPTH || full(out, next)) return
+            for (i in 0 until n.childCount) {
+                val c = n.getChild(i) ?: continue
+                var kept = false
+                if (visible(c, screen)) {
+                    if (interactive(c)) kept = compactNode(c, screen, next, out, depth, keep)
+                    else emitInteractiveOnly(c, screen, next, out, depth + 1, keep)
+                }
+                if (!kept) recycleNode(c)
+            }
         }
 
         @Suppress("DEPRECATION")
@@ -267,8 +439,10 @@ class Fox1AccessibilityService : AccessibilityService() {
                 callback(scrollNode.performAction(action))
                 return
             }
-            // Fallback: swipe gesture (490x580 screen)
-            val cx = 245f; val cy = 290f; val d = 200f
+            // Fallback: a swipe through the middle of the screen.
+            val dm = instance?.resources?.displayMetrics
+            val cx = (dm?.widthPixels ?: 490) / 2f; val cy = (dm?.heightPixels ?: 580) / 2f
+            val d = cy * 0.6f
             val (sx, sy, ex, ey) = when (direction) {
                 "down" -> listOf(cx, cy + d, cx, cy - d)
                 "up" -> listOf(cx, cy - d, cx, cy + d)
@@ -308,6 +482,20 @@ class Fox1AccessibilityService : AccessibilityService() {
         AccessibilityKeeper.setWanted(this, false)
         return super.onUnbind(intent)
     }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // The activity in front — the compact screen's header. Window-state
+        // events also fire for dialogs and menus, so only a class Android
+        // knows as an activity counts.
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return
+        val cls = event.className?.toString() ?: return
+        val isActivity = activityClasses.getOrPut("$pkg/$cls") {
+            try { packageManager.getActivityInfo(ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
+        }
+        if (isActivity) {
+            lastActivityPkg = pkg
+            lastActivity = cls.substringAfterLast('.')
+        }
+    }
     override fun onInterrupt() {}
 }

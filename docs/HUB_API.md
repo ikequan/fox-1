@@ -262,3 +262,23 @@ Permission = {"id": "microphone", "label": "Microphone", "why": "So FOX-1 can he
 - Older pages, signed in: `/logs` (live log), `/api/logs/files` (saved
   sessions), `/ring` (ring console), `/api/bridge/recordings` (call-bridge
   test recordings).
+
+## Developer
+
+Only while developer mode is on (tap the version in the device's Settings
+seven times); otherwise each answers `403`.
+
+- `GET /api/dev/screen` → the raw accessibility tree, and
+  `?format=compact` → `{"compact":"…"}`, the screen as `get_screen` gives it
+  to the model. Read on the device, no model call.
+- `POST /api/dev/screen-tool` `{"name":"tap","args":{"node_id":3}}` → the
+  tool's result. Runs one screen tool (`get_screen`, `tap`, `scroll`,
+  `type_text`, `press_back`, `press_home`, `launch_app`) exactly as the model
+  would, with no model call.
+- `POST /api/dev/task` `{"text":"…"}` → `{"ok":true}` — sends a typed request
+  to the assistant in a fresh conversation, mic off. **This calls the model and
+  is billed.**
+- `GET /api/dev/usage` →
+  `{"turns":[{"at","prompt","toolUsePrompt","response","thoughts","usd"}…],"totalUsd":0.41,"screens":["…"]}`
+  — the current conversation's cost per turn from the model's own token
+  counts, and the screens read since the last `/api/dev/task`.

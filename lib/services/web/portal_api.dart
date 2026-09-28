@@ -19,6 +19,10 @@ import '../ring/health_store.dart';
 import '../ring/ring_service.dart';
 import '../platform/system_actions_service.dart';
 import '../setup/device_setup.dart';
+import '../agent/native_tools_bridge.dart';
+import '../agent/screen_capture.dart';
+import '../platform/screen_automation_service.dart';
+import '../session/ai_session_manager.dart';
 import 'package:flutter/painting.dart' show Color;
 
 import '../../watch_avatar/watch_avatar.dart'
@@ -73,6 +77,10 @@ class PortalApi {
       ..post('/api/setup/done', _setupDone)
       ..get('/api/backup', _backup)
       ..post('/api/restore', _restore)
+      ..post('/api/dev/task', _devTask)
+      ..get('/api/dev/usage', _devUsage)
+      ..get('/api/dev/screen', _devScreen)
+      ..post('/api/dev/screen-tool', _devScreenTool)
       ..post('/api/portal/stop', _stop);
   }
 
@@ -602,6 +610,78 @@ class PortalApi {
       debugPrint('[BACKUP] restore failed: $e');
       return _fail(500, 'Could not restore: $e');
     }
+  }
+
+  // ---------------------------------------------------- developer: cost
+
+  /// Developer mode only. `{"text":"…"}` runs a typed task in a fresh
+  /// conversation, mic off, and keeps its screen reads — for measuring what a
+  /// task costs (`/api/dev/usage`).
+  Future<shelf.Response> _devTask(shelf.Request r) async {
+    final c = globalContainer;
+    if (!c.read(developerModeProvider)) return _fail(403, 'developer mode is off');
+    final Map body;
+    try {
+      body = jsonDecode(await r.readAsString()) as Map;
+    } catch (_) {
+      return _fail(400, 'expected {"text":"…"}');
+    }
+    final text = '${body['text'] ?? ''}'.trim();
+    if (text.isEmpty) return _fail(400, 'expected {"text":"…"}');
+    final session = await c.read(aiSessionManagerProvider).ensureSession();
+    if (session == null) return _fail(409, 'no API key');
+    ScreenCapture.start();
+    await session.runTypedTask(text);
+    return _ok();
+  }
+
+  /// Developer mode only: the screen as `get_screen` would give it to the
+  /// model — read on the device by the accessibility service, no Gemini call.
+  /// For measuring screen sizes without spending anything.
+  Future<shelf.Response> _devScreen(shelf.Request r) async {
+    if (!globalContainer.read(developerModeProvider)) return _fail(403, 'developer mode is off');
+    final svc = ScreenAutomationService();
+    if (r.url.queryParameters['format'] == 'compact') {
+      return _json({'compact': (await svc.getScreen(keep: false))['screen']});
+    }
+    // The raw tree the model used to get, for comparison.
+    return _json(await svc.getScreenTree());
+  }
+
+  /// The screen tools the developer endpoint may run.
+  static const _devScreenTools = {
+    'get_screen', 'tap', 'scroll', 'type_text', 'press_back', 'press_home', 'launch_app',
+  };
+
+  /// Developer mode only: `{"name":"tap","args":{"node_id":3}}` runs one
+  /// screen tool exactly as the model would, on the device, with no Gemini
+  /// call — for checking screen automation for free.
+  Future<shelf.Response> _devScreenTool(shelf.Request r) async {
+    if (!globalContainer.read(developerModeProvider)) return _fail(403, 'developer mode is off');
+    final Map body;
+    try {
+      body = jsonDecode(await r.readAsString()) as Map;
+    } catch (_) {
+      return _fail(400, 'expected {"name":"…","args":{…}}');
+    }
+    final name = '${body['name'] ?? ''}';
+    if (!_devScreenTools.contains(name)) return _fail(400, 'not a screen tool: $name');
+    final args = body['args'] is Map ? Map<String, dynamic>.from(body['args'] as Map) : <String, dynamic>{};
+    return _json(await NativeToolsBridge().handleToolCall(name, args));
+  }
+
+  /// What the current conversation's turns cost, from Google's counts, and
+  /// the screen reads kept since the last `/api/dev/task`.
+  Future<shelf.Response> _devUsage(shelf.Request r) async {
+    final c = globalContainer;
+    if (!c.read(developerModeProvider)) return _fail(403, 'developer mode is off');
+    final session = c.read(aiSessionManagerProvider).session;
+    final u = session?.gemini.usage;
+    return _json({
+      'turns': [for (final s in u?.samples ?? const []) s.toJson(u!.prices)],
+      'totalUsd': u?.totalUsd ?? 0,
+      'screens': ScreenCapture.captured,
+    });
   }
 
   // ------------------------------------------------------------ helpers

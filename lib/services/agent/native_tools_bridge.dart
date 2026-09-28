@@ -12,6 +12,7 @@ import '../memory/memory_store.dart';
 import '../call/dialed_numbers.dart';
 import '../notes/note_tools.dart';
 import '../ring/ring_tools.dart';
+import 'screen_capture.dart';
 
 /// Handles native on-device tool calls locally, falling through to an optional
 /// inner [AgentBridge] for everything else.
@@ -173,9 +174,9 @@ class NativeToolsBridge implements AgentBridge {
       (_ring != null && RingTools.names.contains(name)) ||
       (_notes != null && NoteTools.names.contains(name));
 
-  /// A tool result can be a whole screen tree. Log the verdict, not the payload.
+  /// A tool result can be a whole screen. Log the verdict, not the payload.
   String _summarise(Map<String, dynamic> r) {
-    if (r['success'] == false) return 'FAILED: ${r['error']}';
+    if (r['success'] == false) return 'FAILED: ${r['error'] ?? r['result']}';
     final s = r['result']?.toString() ?? 'ok';
     return s.length > 120 ? '${s.substring(0, 120)}…' : s;
   }
@@ -342,7 +343,9 @@ class NativeToolsBridge implements AgentBridge {
           };
 
         case 'get_screen':
-          return _screenService.getScreen();
+          final screen = await _screenService.getScreen();
+          if (screen['screen'] is String) ScreenCapture.record(screen['screen'] as String);
+          return screen;
 
         case 'tap':
           return _verifyEffect(
@@ -583,10 +586,11 @@ class NativeToolsBridge implements AgentBridge {
     final deadline = DateTime.now().add(AppConstants.appReadyTimeout);
     while (DateTime.now().isBefore(deadline)) {
       await Future.delayed(AppConstants.appReadyPollInterval);
-      final screen = await _screenService.getScreen();
-      if (screen['success'] != true) continue;
+      // keep: false — a background check must not renumber the model's ids.
+      final screen = await _screenService.getScreen(keep: false);
       final data = screen['screen'];
-      if (data is Map && data['package'] == packageName) return true;
+      if (screen['success'] != true || data is! String) continue;
+      if (ScreenAutomationService.packageOf(data) == packageName) return true;
     }
     return false;
   }
@@ -856,7 +860,7 @@ class NativeToolsBridge implements AgentBridge {
     },
     {
       'name': 'get_screen',
-      'description': 'Read the device SCREEN — the current UI contents as a structured accessibility tree showing all elements with their text, bounds, and interactive state. This is for controlling apps, NOT for seeing the physical world (use look for that). It is free and instant, so call it liberally after launching an app or performing an action. Node IDs are only valid until the next get_screen call.',
+      'description': 'Read the device SCREEN, for controlling apps — NOT the physical world (use look for that). Returns text, one line per item. The first line is package/Activity, plus the window title when it says more. Then, top to bottom: a quoted line is text you can read; a line starting [n] is something you can act on, where n is its node_id for tap or scroll. Kinds: tap, input (its current value, or its placeholder marked (hint); focused = typing goes there), scroll, check[x] / check[ ], and sel for the selected tab or item. A tap line holds all the text of its row, so a chat or message row reads "name · preview · time". An element with no text shows where it is, e.g. (icon, top-right). Nothing off screen is listed; scroll to see more. node_ids change on every get_screen call. Read it again after each action — but not in a loop while waiting (use wait_for_screen).',
       'parameters': {'type': 'object', 'properties': {}},
     },
     // --- Camera (physical world) ---
@@ -923,7 +927,7 @@ class NativeToolsBridge implements AgentBridge {
       'parameters': {
         'type': 'object',
         'properties': {
-          'node_id': {'type': 'integer', 'description': 'Node ID from get_screen results.'},
+          'node_id': {'type': 'integer', 'description': 'The n of an [n] line from the latest get_screen.'},
           'text': {'type': 'string', 'description': 'Text or content description to find and tap.'},
           'x': {'type': 'number', 'description': 'X coordinate to tap.'},
           'y': {'type': 'number', 'description': 'Y coordinate to tap.'},

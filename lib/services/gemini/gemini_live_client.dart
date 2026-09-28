@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../config/constants.dart';
+import 'usage_meter.dart';
 
 /// Client for Gemini Live API (bidirectional WebSocket).
 /// Sends: JPEG frames + PCM audio
@@ -105,6 +106,10 @@ class GeminiLiveClient {
   DateTime? get lastMessageAt => _lastMessageAt;
   DateTime? _lastMessageAt;
   int _msgCount = 0;
+
+  /// Google's own token counts for every turn of this client's sessions, and
+  /// what they cost (`[COST]` lines in the log).
+  final UsageMeter usage = UsageMeter();
 
   String? _resumptionHandle;
   bool _resumable = false;
@@ -319,6 +324,14 @@ class GeminiLiveClient {
     }
   }
 
+  /// Start the next connection as a new conversation, not a resumed one.
+  void forgetResumption() {
+    _resumptionHandle = null;
+    _pendingResumeHandle = null;
+    _handleAt = null;
+    _resumable = false;
+  }
+
   void sendText(String text) {
     if (!isConnected || _ws == null) return;
     try {
@@ -507,6 +520,15 @@ class GeminiLiveClient {
         final timeLeft = _parseDuration(goAwayMsg['timeLeft']);
         _log('goAway: ${timeLeft.inSeconds}s left');
         if (!_disposed) _goAway.add(timeLeft);
+      }
+
+      final usageMetadata = msg['usageMetadata'];
+      if (usageMetadata is Map<String, dynamic>) {
+        final sample = UsageSample.parse(usageMetadata);
+        if (sample != null) {
+          usage.add(sample);
+          debugPrint('[COST] ${usage.describe(sample)}');
+        }
       }
 
       if (speechActivityOf(msg) == 'start' && !_disposed) {

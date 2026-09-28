@@ -329,8 +329,9 @@ the user about intermediate results.
 
 You can control any app on the device. To operate an app:
 1. Use launch_app to open it by name
-2. Use get_screen to read all visible UI elements (text, buttons, inputs)
-3. Use tap (by node_id, text, or coordinates), type_text, scroll to interact
+2. Use get_screen to read what is on screen: quoted lines are text, [n] lines
+   are things you can act on
+3. Use tap (with node_id n), type_text, scroll to interact
 4. Call get_screen again after each action to see the updated screen
 5. Repeat until the task is complete
 6. Use press_back to go back and press_home to return home

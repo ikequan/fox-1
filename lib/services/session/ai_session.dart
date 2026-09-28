@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../../config/constants.dart';
@@ -210,6 +209,23 @@ class AISession implements AgentEnvironment {
       await goCold();
       rethrow;
     }
+  }
+
+  /// Developer measurement (`/api/dev/task`): [text] as a typed request in a
+  /// **fresh** conversation with the microphone off, so what it costs is the
+  /// task alone — no resumed history, no room noise. Every turn's tokens land
+  /// in `gemini.usage`.
+  Future<void> runTypedTask(String text) async {
+    if (_disposed) return;
+    if (_connected) await goCold();
+    gemini.forgetResumption();
+    gemini.usage.clear();
+    _markActivity();
+    _emitState(AISessionState.starting);
+    await _connect();
+    _emitState(AISessionState.active);
+    debugPrint('[AI_SESSION] typed task: $text');
+    gemini.sendText(text);
   }
 
   Future<void> _connect() async {
@@ -685,9 +701,10 @@ class AISession implements AgentEnvironment {
         return;
       }
 
-      final screen = await _screenAutomation.getScreen();
+      // keep: false — polling must not renumber the ids the model is holding.
+      final screen = await _screenAutomation.getScreen(keep: false);
       final present = screen['success'] == true &&
-          jsonEncode(screen['screen']).toLowerCase().contains(needle);
+          '${screen['screen']}'.toLowerCase().contains(needle);
       final matched = untilGone ? !present : present;
 
       if (matched) {

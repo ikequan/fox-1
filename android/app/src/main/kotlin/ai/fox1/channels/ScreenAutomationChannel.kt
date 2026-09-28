@@ -59,6 +59,17 @@ object ScreenAutomationChannel {
                     "getScreenSignature" -> {
                         result.success(Fox1AccessibilityService.getScreenSignature())
                     }
+                    "getCompactScreen" -> {
+                        val keep = call.argument<Boolean>("keep") ?: true
+                        val text = Fox1AccessibilityService.getCompactScreen(keep)
+                        if (text != null) {
+                            result.success(mapOf<String, Any>("success" to true, "screen" to text))
+                        } else {
+                            result.success(mapOf<String, Any>(
+                                "success" to false,
+                                "error" to whyFailed(activity, "No active window to read")))
+                        }
+                    }
                     "getScreen" -> {
                         val tree = Fox1AccessibilityService.getScreenTree()
                         if (tree != null) {
