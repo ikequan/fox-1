@@ -50,6 +50,8 @@ class AISessionManager {
       r.read(geminiModelProvider),
       r.read(geminiVoiceProvider),
       r.read(userSystemPromptProvider),
+      // Developer mode decides which prompt is sent (see _systemPrompt).
+      r.read(developerModeProvider),
       r.read(userProfileProvider),
       r.read(agentProviderTypeProvider).name,
       r.read(openClawHostProvider),
@@ -166,7 +168,9 @@ class AISessionManager {
 
     final name = _ref.read(assistantNameProvider);
     final persona = GeminiConfig.withName(_ref.read(aiPersonaProvider).trim(), name);
-    final basePrompt = _ref.read(userSystemPromptProvider).trim();
+    // The saved prompt only in developer mode; otherwise the built-in one.
+    final saved = _ref.read(userSystemPromptProvider).trim();
+    final basePrompt = _ref.read(developerModeProvider) && saved.isNotEmpty ? saved : GeminiConfig.defaultPrompt.trim();
     final userProfile = _ref.read(userProfileProvider).trim();
     final promptParts = <String>[
       // Its name first, whatever the persona says — the wearer may have

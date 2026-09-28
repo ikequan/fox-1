@@ -35,7 +35,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late TextEditingController _arTokenController;
   late TextEditingController _nameController;
   late TextEditingController _personaController;
-  late TextEditingController _systemPromptController;
   late TextEditingController _userProfileController;
   late TextEditingController _callPromptController;
   late TextEditingController _aaBlockedController;
@@ -127,9 +126,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _personaController = TextEditingController(
       text: ref.read(aiPersonaProvider),
     );
-    _systemPromptController = TextEditingController(
-      text: ref.read(userSystemPromptProvider),
-    );
     _userProfileController = TextEditingController(
       text: ref.read(userProfileProvider),
     );
@@ -192,7 +188,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _arTokenController.dispose();
     _nameController.dispose();
     _personaController.dispose();
-    _systemPromptController.dispose();
     _userProfileController.dispose();
     _callPromptController.dispose();
     _aaBlockedController.dispose();
@@ -270,10 +265,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final persona = _personaController.text.trim();
     ref.read(aiPersonaProvider.notifier).state = persona;
     await prefs.setString('ai_persona', persona);
-
-    final sysPrompt = _systemPromptController.text.trim();
-    ref.read(userSystemPromptProvider.notifier).state = sysPrompt;
-    await prefs.setString('user_system_prompt', sysPrompt);
 
     final profile = _userProfileController.text.trim();
     ref.read(userProfileProvider.notifier).state = profile;
@@ -515,31 +506,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             style: TextStyle(color: Colors.white38, fontSize: 10),
           ),
 
-          // System Prompt section
-          const SizedBox(height: 16),
-          const _SectionHeader('System Prompt'),
-          TextField(
-            controller: _systemPromptController,
-            maxLines: 4,
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-            decoration: InputDecoration(
-              hintText: 'Add custom instructions for the AI...',
-              hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
-              filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.05),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide.none,
-              ),
-              contentPadding: const EdgeInsets.all(12),
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Instructions for the device assistant only — never sent to the '
-            'call agent',
-            style: TextStyle(color: Colors.white38, fontSize: 10),
-          ),
+          // No System Prompt field: the device instructions are built in
+          // (GeminiConfig.defaultPrompt) and only developer mode can change
+          // them, from the Hub. Character goes in the persona above.
 
           // User Profile section
           const SizedBox(height: 16),

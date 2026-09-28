@@ -36,13 +36,13 @@ an affordable Android device, and a smart ring can serve as its button.
 |:-:|---|---|
 | 🎙️ | **Live conversation** | Real-time voice conversation that you can interrupt at any time. Hold the ring to talk; after that it stays hands-free. FOX-1 is built to work with more than one live model: **Gemini Live** today, with **GPT-Live-1** and open-source live models on the way. |
 | 👀 | **Vision** | Looks through the device's camera when you ask about what's in front of you. |
-| 📱 | **On-screen tasks** | Opens apps, reads the screen, and taps, swipes, scrolls and types for you, so it can use any app on the device. |
+| 📱 | **On-screen tasks** | Uses any app on the device for you: a helper opens it, reads the screen, and taps, scrolls and types until the job is done, then reports back. It asks before anything that sends, pays or deletes. Texts go straight out, and music, searches, directions and WhatsApp messages open in one step. |
 | ⏰ | **Device controls** | Alarms, timers, volume, brightness, contacts and calls, all by voice. |
-| 🛰️ | **Remote jobs** | Hands bigger tasks to an agent gateway: [OpenClaw](https://github.com/openclaw/openclaw), or an Agent Relay (Codex or Claude Code). It keeps checking on the job and tells you when it's done. |
+| 🛰️ | **Remote jobs** | When you ask for it, hands bigger tasks to an agent gateway: [OpenClaw](https://github.com/openclaw/openclaw), or an Agent Relay (Codex or Claude Code). It keeps checking on the job and tells you when it's done. |
 | 📞 | **Call agent** | Answers or places phone calls for you, talks to the caller, and reports what was said. Needs the [call bridge](https://github.com/ikequan/fox-1-call-bridge). |
 | 📝 | **Voice notes and journals** | Tap the ring four times to record. The note is transcribed and summarised, with action items, people and dates, in whatever language you spoke. |
 | ❤️ | **Health** | Heart rate, SpO2, steps and sleep from the ring, with day, week, month and year reports and a stress *estimate* (it is not a diagnosis). |
-| 🧠 | **Memory** | Remembers what you tell it to. Anything a caller says is kept apart as a claim until you confirm it. |
+| 🧠 | **Memory** | Remembers what you tell it to. Anything a caller says is kept apart as a claim until you confirm it. It also remembers your conversations the way people do: the key points while they're fresh, fainter as they age, and it can always look back to the exact words. |
 | 💾 | **Backup & restore** | One file with your voice notes and recordings, health history, chats, memory, call history and settings. Restore it on the same device or a new one. |
 | 🌐 | **FOX-1 Hub** | Set up, manage and personalise your device from your phone. The device serves it itself, privately. See [below](#fox-1-hub). |
 

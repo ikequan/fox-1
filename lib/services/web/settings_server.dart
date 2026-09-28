@@ -440,7 +440,7 @@ class SettingsServer {
       'ai_persona': c.read(aiPersonaProvider).isEmpty
           ? GeminiConfig.defaultPersona.trim()
           : c.read(aiPersonaProvider),
-      'system_prompt': c.read(userSystemPromptProvider).isEmpty
+      if (c.read(developerModeProvider)) 'system_prompt': c.read(userSystemPromptProvider).isEmpty
           ? GeminiConfig.defaultPrompt.trim()
           : c.read(userSystemPromptProvider),
       'user_profile': c.read(userProfileProvider),
@@ -525,7 +525,10 @@ class SettingsServer {
     }
     await text('assistant_name', assistantNameProvider, fallback: GeminiConfig.defaultAssistantName);
     await text('ai_persona', aiPersonaProvider);
-    await text('system_prompt', userSystemPromptProvider, pref: 'user_system_prompt');
+    // Only developer mode may change the device instructions.
+    if (c.read(developerModeProvider)) {
+      await text('system_prompt', userSystemPromptProvider, pref: 'user_system_prompt');
+    }
     await text('user_profile', userProfileProvider);
 
     if (data.containsKey('call_agent_on_duty')) {

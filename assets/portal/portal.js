@@ -2367,9 +2367,10 @@ PAGES.settings = function pageSettings(view) {
         hint: 'What your assistant is called — on the device, here in FOX-1 Hub, and on calls.' }),
       fArea('ai_persona', 'Who the assistant is', { rows: 4, placeholder: 'You are {name}, an AI assistant. You are…',
         hint: 'Character. Used by the device assistant AND when answering phone calls. Write {name} for its name, so a rename reaches it.' }));
-    const sysPrompt = sectionCard('System Prompt', 'sliders', null,
+    // Developer mode only: the server leaves system_prompt out otherwise.
+    const sysPrompt = !('system_prompt' in F.draft) ? null : sectionCard('System Prompt (developer)', 'sliders', null,
       fArea('system_prompt', 'Custom instructions', { tall: true, rows: 10, placeholder: 'System prompt for the AI…',
-        hint: 'Instructions for the device assistant only — never sent to the call agent. {name} becomes its name.' }));
+        hint: 'Shown in developer mode only. The device assistant’s built-in instructions — how it uses its tools. Edits here are used only while developer mode is on; turn it off and the built-in prompt is used again. Never sent to the call agent. {name} becomes its name.' }));
     const profile = sectionCard('About you', 'user', null,
       fArea('user_profile', 'User profile', { rows: 4, placeholder: 'Name, preferences, context about yourself…',
         hint: 'Shared with the device assistant and with the call agent.' }));
@@ -2549,7 +2550,7 @@ PAGES.settings = function pageSettings(view) {
       fRange('watch_time_x', 'Time across', { min: 0, max: 1, step: 0.01, def: 0.5, fmt: (v) => `${Math.round(v * 100)}%`, hint: 'Bloub and the fox: where the time sits, from the left edge.' }),
       fRange('watch_time_y', 'Time down', { min: 0, max: 1, step: 0.01, def: 0.74, fmt: (v) => `${Math.round(v * 100)}%`, hint: 'Bloub and the fox: where the time sits, from the top.' }));
 
-    root.replaceChildren(assistant, persona, sysPrompt, profile, permissionsCard(), calls, agent, camera, mascot, design, watchface);
+    root.replaceChildren(...[assistant, persona, sysPrompt].filter(Boolean), profile, permissionsCard(), calls, agent, camera, mascot, design, watchface);
     if (camOn) { frame.hidden = false; startCam(); }
     refreshDirty();
   }

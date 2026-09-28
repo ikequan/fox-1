@@ -173,6 +173,11 @@ Fact = {"id":"f12","text":"…","subject":"200000001"|"","subjectLabel":"Kofi"|"
 
 - `GET /api/settings` → every setting (keys as in `settings_server.dart`).
 - `POST /api/settings` → **partial**: only keys present change.
+- `stand_down_after`: minutes of quiet before a conversation ends, one of
+  1, 2, 5, 10 (default 2).
+- `system_prompt`: the device assistant's instructions. Sent and accepted
+  **only in developer mode**; otherwise the built-in prompt is used and the
+  key is left out.
 - `GET /api/settings/options` →
   `{"models":[{"value","label"}],"voices":[{"name","style"}]}`.
 - `POST /api/camera` (partial, applied live) and `GET /api/camera/stream`
@@ -272,13 +277,18 @@ seven times); otherwise each answers `403`.
   `?format=compact` → `{"compact":"…"}`, the screen as `get_screen` gives it
   to the model. Read on the device, no model call.
 - `POST /api/dev/screen-tool` `{"name":"tap","args":{"node_id":3}}` → the
-  tool's result. Runs one screen tool (`get_screen`, `tap`, `scroll`,
-  `type_text`, `press_back`, `press_home`, `launch_app`) exactly as the model
-  would, with no model call.
+  tool's result. Runs one tool exactly as the model would: `get_screen`,
+  `tap`, `scroll`, `type_text`, `press_back`, `press_enter`, `press_home`,
+  `launch_app`, `app_shortcut`, `close_app`, `close_all_apps` — no model call.
+  Also `send_sms`, which **sends a real text**, and `do_on_device`, which runs
+  the screen helper and **is billed** (a Flash model, about a cent a task).
 - `POST /api/dev/task` `{"text":"…"}` → `{"ok":true}` — sends a typed request
   to the assistant in a fresh conversation, mic off. **This calls the model and
   is billed.**
 - `GET /api/dev/usage` →
   `{"turns":[{"at","prompt","toolUsePrompt","response","thoughts","usd"}…],"totalUsd":0.41,"screens":["…"]}`
   — the current conversation's cost per turn from the model's own token
-  counts, and the screens read since the last `/api/dev/task`.
+  counts, and the screens read since the last `/api/dev/task`. `totalUsd`
+  includes the helper and the key points written for the conversation.
+- `GET /api/dev/screens` → every screen the model or helper read today:
+  what it was given beside the raw tree; `/dev/screens` shows it as a page.
