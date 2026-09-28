@@ -59,10 +59,14 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
+        <!-- singleTask, as launchers are: one MainActivity, whatever opens it.
+             With singleTop, opening FOX-1 as an app (an app list, adb) and
+             then as Home made two, each with its own Flutter engine — two
+             Hubs on one port and two ring links fighting over the ring. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
